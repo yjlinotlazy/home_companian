@@ -1,0 +1,22 @@
+mode: scheduled
+font: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
+refresh_minutes: 60
+
+items:
+  - id: walk
+    title: 散步
+    description: 出门走一走
+  - id: read
+    title: 读书
+    description: 安静读几页书
+
+schedule:
+  - time: "12:00"
+    item: walk
+  - time: "13:00"
+    item: read
+
+random_items:
+  - walk
+  - read
+

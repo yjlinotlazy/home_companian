@@ -1,0 +1,2 @@
+Pillow>=11
+PyYAML>=6
