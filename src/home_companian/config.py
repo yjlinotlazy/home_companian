@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .domain import PanelConfig, SlotAssignment, StatusAssignment, StatusBarConfig
+
 
 DEFAULT_CONFIG_PATH = Path("~/.config/home_companian/config.yaml").expanduser()
+ITEM_TYPES = {"personal", "family_task"}
 
 
 class ConfigError(ValueError):
@@ -16,19 +21,39 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Item:
-    id: str
-    title: str
-    description: str = ""
+    id: int
+    type: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ScheduleEntry:
+    time: time
+    item_id: int
+
+
+@dataclass(frozen=True)
+class FontChoice:
+    name: str
+    path: Path
 
 
 @dataclass(frozen=True)
 class Settings:
     mode: str
     font: Path
+    fonts: tuple[FontChoice, ...]
+    latin_font: Path
+    latin_fonts: tuple[FontChoice, ...]
+    library_dir: Path
     refresh_minutes: int
+    active_start: time
+    active_end: time
     items: tuple[Item, ...]
-    schedule: tuple[dict[str, str], ...]
-    random_items: tuple[str, ...]
+    schedule: tuple[ScheduleEntry, ...]
+    random_items: tuple[int, ...]
+    panel: PanelConfig
+    status_bar: StatusBarConfig = StatusBarConfig()
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
@@ -44,6 +69,169 @@ def _required_text(mapping: dict[str, Any], key: str, label: str) -> str:
     return value.strip()
 
 
+def _required_item_id(mapping: dict[str, Any], key: str, label: str) -> int:
+    value = mapping.get(key)
+    if type(value) is not int or value <= 0:
+        raise ConfigError(f"{label}.{key} must be a positive integer")
+    return value
+
+
+def _configured_path(value: Any, key: str, config_path: Path) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{key} must be configured")
+    configured = Path(value).expanduser()
+    if not configured.is_absolute():
+        configured = config_path.parent / configured
+    return configured.resolve()
+
+
+def _config_time(value: Any, key: str, default: str) -> time:
+    raw = default if value is None else value
+    if not isinstance(raw, str):
+        raise ConfigError(f"{key} must use HH:MM")
+    try:
+        return datetime.strptime(raw, "%H:%M").time()
+    except ValueError as exc:
+        raise ConfigError(f"{key} must use HH:MM") from exc
+
+
+def _load_fonts(
+    root: dict[str, Any],
+    key: str,
+    font: Path,
+    config_path: Path,
+) -> tuple[FontChoice, ...]:
+    raw_fonts = root.get(key)
+    if raw_fonts is None:
+        return (FontChoice(font.stem, font),)
+    if not isinstance(raw_fonts, dict) or not raw_fonts:
+        raise ConfigError(f"{key} must be a non-empty mapping of names to paths")
+
+    fonts: list[FontChoice] = []
+    for raw_name, raw_path in raw_fonts.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ConfigError("font names must be non-empty text")
+        path = _configured_path(raw_path, f"{key}.{raw_name}", config_path)
+        fonts.append(FontChoice(raw_name.strip(), path))
+    if font not in {choice.path for choice in fonts}:
+        raise ConfigError(f"selected font must match one of the paths in {key}")
+    return tuple(fonts)
+
+
+def _load_items(library_dir: Path) -> tuple[Item, ...]:
+    path = library_dir / "items.csv"
+    try:
+        handle = path.open(encoding="utf-8-sig", newline="")
+    except OSError as exc:
+        raise ConfigError(f"items file cannot be opened: {path}") from exc
+
+    try:
+        with handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != ["id", "type", "text"]:
+                raise ConfigError("items.csv columns must be exactly: id,type,text")
+
+            items: list[Item] = []
+            seen_ids: set[int] = set()
+            for row in reader:
+                line = reader.line_num
+                if None in row or any(value is None for value in row.values()):
+                    raise ConfigError(f"items.csv line {line}: expected exactly 3 columns")
+                try:
+                    item_id = int(row["id"])
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(f"items.csv line {line}: id must be a positive integer") from exc
+                if item_id <= 0:
+                    raise ConfigError(f"items.csv line {line}: id must be a positive integer")
+                if item_id in seen_ids:
+                    raise ConfigError(f"duplicate item id: {item_id}")
+
+                item_type = (row["type"] or "").strip()
+                if item_type not in ITEM_TYPES:
+                    raise ConfigError(
+                        f"items.csv line {line}: type must be personal or family_task"
+                    )
+                text = (row["text"] or "").strip()
+                if not text:
+                    raise ConfigError(f"items.csv line {line}: text must not be empty")
+
+                seen_ids.add(item_id)
+                items.append(Item(item_id, item_type, text))
+    except csv.Error as exc:
+        raise ConfigError(f"invalid CSV in {path}: {exc}") from exc
+
+    if not items:
+        raise ConfigError("items.csv must contain at least one item")
+    return tuple(items)
+
+
+def _load_panel(root: dict[str, Any]) -> PanelConfig:
+    raw_panel = root.get(
+        "panel",
+        {"template": "landscape_1", "slots": {1: {"module": "items"}}},
+    )
+    panel = _mapping(raw_panel, "panel")
+    template = _required_text(panel, "template", "panel")
+    raw_slots = panel.get("slots")
+    if not isinstance(raw_slots, dict):
+        raise ConfigError("panel.slots must be a mapping")
+
+    slots: list[SlotAssignment] = []
+    for slot_id, raw_assignment in raw_slots.items():
+        if type(slot_id) is not int or slot_id <= 0:
+            raise ConfigError("panel slot ids must be positive integers")
+        assignment = _mapping(raw_assignment, f"panel.slots.{slot_id}")
+        module = _required_text(assignment, "module", f"panel.slots.{slot_id}")
+        options: list[tuple[str, str]] = []
+        for key, value in assignment.items():
+            if key == "module":
+                continue
+            if not isinstance(key, str) or not isinstance(value, str) or not value.strip():
+                raise ConfigError(
+                    f"panel.slots.{slot_id}.{key} must be non-empty text"
+                )
+            options.append((key, value.strip()))
+        slots.append(SlotAssignment(slot_id, module, tuple(sorted(options))))
+    return PanelConfig(template, tuple(sorted(slots, key=lambda slot: slot.slot_id)))
+
+
+def _load_status_bar(root: dict[str, Any]) -> StatusBarConfig:
+    raw_status_bar = root.get(
+        "status_bar",
+        {
+            "left": [],
+            "center": [{"module": "solar_term"}],
+            "right": [{"module": "weekday"}],
+        },
+    )
+    status_bar = _mapping(raw_status_bar, "status_bar")
+    groups: dict[str, tuple[StatusAssignment, ...]] = {}
+    for group in ("left", "center", "right"):
+        raw_assignments = status_bar.get(group, [])
+        if not isinstance(raw_assignments, list):
+            raise ConfigError(f"status_bar.{group} must be a list")
+        assignments: list[StatusAssignment] = []
+        for index, raw_assignment in enumerate(raw_assignments):
+            label = f"status_bar.{group}[{index}]"
+            assignment = _mapping(raw_assignment, label)
+            module = _required_text(assignment, "module", label)
+            if module not in {"date", "solar_term", "time", "weekday"}:
+                raise ConfigError(f"unknown status module: {module}")
+            options: list[tuple[str, str]] = []
+            for key, value in assignment.items():
+                if key == "module":
+                    continue
+                if not isinstance(key, str) or not isinstance(value, str) or not value:
+                    raise ConfigError(f"{label}.{key} must be text")
+                options.append((key, value))
+            assignments.append(StatusAssignment(module, tuple(sorted(options))))
+        groups[group] = tuple(assignments)
+    extra_groups = set(status_bar) - {"left", "center", "right"}
+    if extra_groups:
+        raise ConfigError(f"unknown status bar group: {sorted(extra_groups)[0]}")
+    return StatusBarConfig(groups["left"], groups["center"], groups["right"])
+
+
 def load_settings(path: Path = DEFAULT_CONFIG_PATH) -> Settings:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -53,51 +241,78 @@ def load_settings(path: Path = DEFAULT_CONFIG_PATH) -> Settings:
         raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
 
     root = _mapping(raw, "config")
-    raw_items = root.get("items")
-    if not isinstance(raw_items, list) or not raw_items:
-        raise ConfigError("items must be a non-empty list")
-
-    items: list[Item] = []
-    seen_ids: set[str] = set()
-    for index, value in enumerate(raw_items):
-        item_data = _mapping(value, f"items[{index}]")
-        item_id = _required_text(item_data, "id", f"items[{index}]")
-        if item_id in seen_ids:
-            raise ConfigError(f"duplicate item id: {item_id}")
-        seen_ids.add(item_id)
-        items.append(
-            Item(
-                id=item_id,
-                title=_required_text(item_data, "title", f"items[{index}]"),
-                description=str(item_data.get("description", "")).strip(),
-            )
-        )
+    library_dir = _configured_path(root.get("library_dir"), "library_dir", path)
+    items = _load_items(library_dir)
+    item_ids = {item.id for item in items}
 
     mode = str(root.get("mode", "scheduled"))
     if mode not in {"scheduled", "random"}:
         raise ConfigError("mode must be scheduled or random")
 
-    raw_font = root.get("font")
-    if not isinstance(raw_font, str) or not raw_font.strip():
-        raise ConfigError("font must be configured")
-    font = Path(raw_font).expanduser()
+    font = _configured_path(root.get("font"), "font", path)
+    fonts = _load_fonts(root, "fonts", font, path)
+    latin_font = _configured_path(root.get("latin_font", root.get("font")), "latin_font", path)
+    latin_fonts = _load_fonts(root, "latin_fonts", latin_font, path)
 
     refresh_minutes = root.get("refresh_minutes", 60)
     if not isinstance(refresh_minutes, int) or refresh_minutes <= 0:
         raise ConfigError("refresh_minutes must be a positive integer")
 
-    schedule = root.get("schedule", [])
-    random_items = root.get("random_items", [])
-    if not isinstance(schedule, list) or not all(isinstance(row, dict) for row in schedule):
+    active_start = _config_time(root.get("active_start"), "active_start", "07:00")
+    active_end = _config_time(root.get("active_end"), "active_end", "22:00")
+    if active_start >= active_end:
+        raise ConfigError("active_start must be earlier than active_end")
+
+    raw_schedule = root.get("schedule", [])
+    raw_random_items = root.get("random_items", [])
+    if not isinstance(raw_schedule, list) or not all(isinstance(row, dict) for row in raw_schedule):
         raise ConfigError("schedule must be a list of mappings")
-    if not isinstance(random_items, list) or not all(isinstance(item, str) for item in random_items):
+    if not isinstance(raw_random_items, list) or not all(type(item) is int for item in raw_random_items):
         raise ConfigError("random_items must be a list of item ids")
+
+    schedule: list[ScheduleEntry] = []
+    seen_times: set[time] = set()
+    for index, row in enumerate(raw_schedule):
+        raw_time = _required_text(row, "time", f"schedule[{index}]")
+        item_id = _required_item_id(row, "item", f"schedule[{index}]")
+        try:
+            entry_time = datetime.strptime(raw_time, "%H:%M").time()
+        except ValueError as exc:
+            raise ConfigError(f"schedule[{index}].time must use HH:MM") from exc
+        if entry_time in seen_times:
+            raise ConfigError(f"duplicate schedule time: {raw_time}")
+        if item_id not in item_ids:
+            raise ConfigError(f"schedule[{index}] references unknown item: {item_id}")
+        seen_times.add(entry_time)
+        schedule.append(ScheduleEntry(entry_time, item_id))
+
+    random_items = tuple(raw_random_items)
+    unknown_random_ids = [item_id for item_id in random_items if item_id not in item_ids]
+    if unknown_random_ids:
+        raise ConfigError(f"random_items references unknown item: {unknown_random_ids[0]}")
+    if not schedule:
+        raise ConfigError("schedule must not be empty")
+    if not random_items:
+        raise ConfigError("random_items must not be empty")
+    if len(set(random_items)) != len(random_items):
+        raise ConfigError("random_items must not contain duplicate ids")
+
+    panel = _load_panel(root)
+    status_bar = _load_status_bar(root)
 
     return Settings(
         mode=mode,
         font=font,
+        fonts=fonts,
+        latin_font=latin_font,
+        latin_fonts=latin_fonts,
+        library_dir=library_dir,
         refresh_minutes=refresh_minutes,
-        items=tuple(items),
-        schedule=tuple(schedule),
-        random_items=tuple(random_items),
+        active_start=active_start,
+        active_end=active_end,
+        items=items,
+        schedule=tuple(sorted(schedule, key=lambda entry: entry.time)),
+        random_items=random_items,
+        panel=panel,
+        status_bar=status_bar,
     )

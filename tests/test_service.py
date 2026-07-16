@@ -1,0 +1,251 @@
+from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+import yaml
+
+from home_companian.service import DisplayService
+
+
+FONT = "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf"
+
+
+class DisplayServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = TemporaryDirectory()
+        root = Path(self.temporary_directory.name)
+        (root / "items.csv").write_text(
+            "id,type,text\n"
+            "1,personal,Walk\n"
+            "2,personal,Read\n"
+            "3,family_task,Clean\n",
+            encoding="utf-8",
+        )
+        self.config_path = root / "config.yaml"
+        self.config_path.write_text(
+            f"font: {FONT}\n"
+            "library_dir: .\n"
+            "panel:\n"
+            "  template: landscape_1\n"
+            "  slots:\n"
+            "    1: {module: items}\n"
+            "mode: scheduled\n"
+            "schedule:\n"
+            "  - {time: '12:00', item: 1}\n"
+            "  - {time: '13:00', item: 2}\n"
+            "random_items: [1, 2, 3]\n",
+            encoding="utf-8",
+        )
+        self.current_display_path = root / "current.png"
+        self.service = DisplayService(self.config_path, self.current_display_path)
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_change_replaces_next_panel_until_device_consumes_it(self) -> None:
+        changed_at = datetime(2026, 7, 15, 12, 30)
+        next_at = self.service.change(3, now=changed_at)
+
+        self.assertEqual(next_at, datetime(2026, 7, 15, 13, 0))
+        self.assertEqual(
+            self.service.render_next(now=datetime(2026, 7, 15, 12, 45)).item_id,
+            3,
+        )
+        self.assertEqual(
+            self.service.render(now=datetime(2026, 7, 15, 13, 0)).item_id,
+            2,
+        )
+        self.assertEqual(
+            self.service.render(device=True, now=datetime(2026, 7, 15, 13, 0)).item_id,
+            3,
+        )
+        self.assertEqual(
+            self.service.render_next(now=datetime(2026, 7, 15, 13, 1)).item_id,
+            2,
+        )
+
+    def test_change_targets_next_refresh_interval(self) -> None:
+        next_at = self.service.change(3, now=datetime(2026, 7, 15, 14, 0))
+        self.assertEqual(next_at, datetime(2026, 7, 15, 15, 0))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_random_change_is_consumed_once_then_prepares_following_panel(self) -> None:
+        self.config_path.write_text(
+            self.config_path.read_text(encoding="utf-8").replace(
+                "mode: scheduled", "mode: random"
+            ),
+            encoding="utf-8",
+        )
+        now = datetime(2026, 7, 15, 12, 30)
+        self.service.change(3, now=now)
+        with patch("home_companian.selection.random.choice", side_effect=lambda values: values[0]):
+            self.assertEqual(self.service.render_next(now=now).item_id, 3)
+            self.assertEqual(self.service.render(device=True, now=now).item_id, 3)
+            self.assertNotEqual(self.service.render_next(now=now).item_id, 3)
+
+    def test_select_font_persists_selected_candidate(self) -> None:
+        other_font = self.config_path.parent / "other.ttf"
+        other_font.touch()
+        content = self.config_path.read_text(encoding="utf-8")
+        self.config_path.write_text(
+            content.replace(
+                f"font: {FONT}\n",
+                f"font: {FONT}\nfonts:\n  默认: {FONT}\n  测试: {other_font}\n",
+            ),
+            encoding="utf-8",
+        )
+
+        selected = self.service.select_font("chinese", "测试")
+        saved = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(selected, other_font)
+        self.assertEqual(saved["font"], str(other_font))
+
+    def test_next_check_aligns_to_half_hour_during_day(self) -> None:
+        self.config_path.write_text(
+            self.config_path.read_text(encoding="utf-8").replace(
+                "mode: scheduled\n",
+                "mode: scheduled\nrefresh_minutes: 30\nactive_start: '07:00'\nactive_end: '22:00'\n",
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.service.next_check_seconds(datetime(2026, 7, 15, 9, 12)),
+            18 * 60,
+        )
+
+    def test_next_check_sleeps_through_night(self) -> None:
+        self.assertEqual(
+            self.service.next_check_seconds(datetime(2026, 7, 15, 22, 0)),
+            9 * 60 * 60,
+        )
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_preview_random_does_not_advance_device_random_state(self) -> None:
+        self.config_path.write_text(
+            self.config_path.read_text(encoding="utf-8").replace(
+                "mode: scheduled", "mode: random"
+            ),
+            encoding="utf-8",
+        )
+        with patch("home_companian.selection.random.choice", side_effect=lambda values: values[0]):
+            preview = self.service.render(preview_random=True)
+            device = self.service.render(device=True)
+
+        self.assertEqual(preview.item_id, 1)
+        self.assertEqual(device.item_id, 1)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_next_random_preview_is_stable_until_device_consumes_it(self) -> None:
+        self.config_path.write_text(
+            self.config_path.read_text(encoding="utf-8").replace(
+                "mode: scheduled", "mode: random"
+            ),
+            encoding="utf-8",
+        )
+        with patch("home_companian.selection.random.choice", side_effect=lambda values: values[0]):
+            first_preview = self.service.render_next()
+            repeated_preview = self.service.render_next()
+            device = self.service.render(device=True)
+            following_preview = self.service.render_next()
+
+        self.assertEqual(first_preview.item_id, repeated_preview.item_id)
+        self.assertEqual(device.item_id, first_preview.item_id)
+        self.assertNotEqual(following_preview.item_id, first_preview.item_id)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_current_display_is_exact_last_device_render(self) -> None:
+        self.assertIsNone(self.service.render_current())
+
+        device = self.service.render(
+            device=True,
+            now=datetime(2026, 7, 15, 12, 30),
+        )
+        self.service.render_next(now=datetime(2026, 7, 15, 12, 45))
+        self.service.render(
+            preview_item_id=2,
+            preview_time=datetime(2026, 7, 15, 18, 0).time(),
+            now=datetime(2026, 7, 15, 18, 0),
+        )
+        current = self.service.render_current()
+
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(current.item_id, device.item_id)
+        self.assertEqual(current.framebuffer, device.framebuffer)
+        self.assertEqual(current.image.tobytes(), device.image.tobytes())
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_restart_keeps_exact_current_display(self) -> None:
+        device = self.service.render(device=True, now=datetime(2026, 7, 15, 12, 30))
+
+        restarted = DisplayService(self.config_path, self.current_display_path)
+        current = restarted.render_current()
+
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(current.framebuffer, device.framebuffer)
+        self.assertEqual(current.image.tobytes(), device.image.tobytes())
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_panel_assignment_change_invalidates_prepared_panel(self) -> None:
+        content = self.config_path.read_text(encoding="utf-8").replace(
+            "mode: scheduled", "mode: random"
+        )
+        self.config_path.write_text(content, encoding="utf-8")
+        with patch("home_companian.selection.random.choice", side_effect=lambda values: values[0]):
+            prepared = self.service.render_next()
+            self.config_path.write_text(
+                content.replace(
+                    "  slots:\n    1: {module: items}\n",
+                    "  slots: {}\n",
+                ),
+                encoding="utf-8",
+            )
+            after_change = self.service.render_next()
+
+        self.assertNotEqual(prepared.item_id, 0)
+        self.assertEqual(after_change.item_id, 0)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_renders_items_and_chinese_in_two_slot_template(self) -> None:
+        chinese = self.config_path.parent / "chinese"
+        chinese.mkdir()
+        (chinese / "full.md").write_text(
+            "# 一年级\n天\n# 二年级\n地\n# 三年级\n人\n"
+            "# 四年级\n山\n# 五年级\n水\n# 六年级\n月\n",
+            encoding="utf-8",
+        )
+        (chinese / "select.md").write_text("天", encoding="utf-8")
+        content = self.config_path.read_text(encoding="utf-8")
+        self.config_path.write_text(
+            content.replace("template: landscape_1", "template: landscape_2").replace(
+                "    1: {module: items}\n",
+                "    1: {module: items}\n    2: {module: chinese, source: select}\n",
+            ),
+            encoding="utf-8",
+        )
+
+        rendered = self.service.render_next(now=datetime(2026, 7, 15, 12, 30))
+
+        self.assertEqual(rendered.image.size, (792, 272))
+        self.assertEqual(rendered.image.crop((0, 0, 300, 44)).getextrema(), (255, 255))
+        self.assertEqual(rendered.image.crop((300, 0, 492, 44)).getextrema(), (0, 255))
+        self.assertEqual(rendered.image.crop((650, 0, 792, 44)).getextrema(), (0, 255))
+        self.assertEqual(rendered.image.crop((528, 0, 792, 272)).getextrema(), (0, 255))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_restart_clears_change(self) -> None:
+        self.service.change(3, now=datetime(2026, 7, 15, 12, 30))
+        restarted = DisplayService(self.config_path, self.current_display_path)
+        self.assertEqual(
+            restarted.render_next(now=datetime(2026, 7, 15, 12, 45)).item_id,
+            2,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

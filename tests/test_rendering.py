@@ -8,6 +8,7 @@ from home_companian.config import Item
 from home_companian.rendering import (
     FRAMEBUFFER_SIZE,
     HEIGHT,
+    CONTENT_HEIGHT,
     VISIBLE_WIDTH,
     image_to_framebuffer,
     render_scene,
@@ -35,15 +36,12 @@ class FramebufferTests(unittest.TestCase):
     @unittest.skipUnless(FONT.exists(), "Source Han Sans font is not installed")
     def test_rendered_scene_has_panel_dimensions(self) -> None:
         image = render_scene(
-            Item("walk", "散步", "出门走一走"),
+            Item(1, "personal", "出门散步十分钟"),
             FONT,
-            battery=82,
             now=datetime(2026, 7, 15, 12, 30),
         )
-        self.assertEqual(image.size, (VISIBLE_WIDTH, HEIGHT))
+        self.assertEqual(image.size, (VISIBLE_WIDTH, CONTENT_HEIGHT))
         self.assertEqual(image.mode, "1")
-
 
 if __name__ == "__main__":
     unittest.main()
-

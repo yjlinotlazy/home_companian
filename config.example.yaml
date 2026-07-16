@@ -1,22 +1,46 @@
 mode: scheduled
 font: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
-refresh_minutes: 60
+fonts:
+  思源黑体: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
+  霞鹜文楷: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
+latin_font: /usr/share/fonts/TTF/CaskaydiaCoveNerdFont-Regular.ttf
+latin_fonts:
+  Caskaydia Cove Nerd Font: /usr/share/fonts/TTF/CaskaydiaCoveNerdFont-Regular.ttf
+  JetBrains Mono Nerd Font: /usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf
+  Noto Sans Mono: /usr/share/fonts/noto/NotoSansMono-Regular.ttf
+  霞鹜文楷: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
+  思源黑体: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
+refresh_minutes: 30
+active_start: "07:00"
+active_end: "22:00"
+library_dir: library.example
 
-items:
-  - id: walk
-    title: 散步
-    description: 出门走一走
-  - id: read
-    title: 读书
-    description: 安静读几页书
+status_bar:
+  left: []
+  center:
+    - module: solar_term
+  right:
+    - module: weekday
+
+panel:
+  template: landscape_3
+  slots:
+    1:
+      module: images
+      collection: plants
+    2:
+      module: items
+    3:
+      module: chinese
+      source: select
 
 schedule:
   - time: "12:00"
-    item: walk
+    item: 1
   - time: "13:00"
-    item: read
+    item: 2
 
 random_items:
-  - walk
-  - read
-
+  - 1
+  - 2
+  - 3

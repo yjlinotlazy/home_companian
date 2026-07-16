@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -11,6 +12,8 @@ from .config import Item
 VISIBLE_WIDTH = 792
 MEMORY_WIDTH = 800
 HEIGHT = 272
+STATUS_BAR_HEIGHT = 44
+CONTENT_HEIGHT = HEIGHT - STATUS_BAR_HEIGHT
 SEAM_X = 396
 FRAMEBUFFER_SIZE = MEMORY_WIDTH * HEIGHT // 8
 THRESHOLD = 180
@@ -23,40 +26,79 @@ def _font(path: Path, size: int) -> ImageFont.FreeTypeFont:
         raise ValueError(f"font cannot be loaded: {path}") from exc
 
 
-def _centered_x(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
-    left, _, right, _ = draw.textbbox((0, 0), text, font=font)
-    return (VISIBLE_WIDTH - (right - left)) // 2 - left
+def _uses_chinese_font(character: str) -> bool:
+    return unicodedata.east_asian_width(character) in {"W", "F"}
+
+
+def _text_runs(text: str) -> list[tuple[str, bool]]:
+    runs: list[tuple[str, bool]] = []
+    for character in text:
+        chinese = _uses_chinese_font(character)
+        if runs and runs[-1][1] == chinese:
+            runs[-1] = (runs[-1][0] + character, chinese)
+        else:
+            runs.append((character, chinese))
+    return runs
+
+
+def _mixed_metrics(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    chinese_font: ImageFont.FreeTypeFont,
+    latin_font: ImageFont.FreeTypeFont,
+) -> tuple[float, int, int]:
+    width = 0.0
+    top = 0
+    bottom = 0
+    for run, chinese in _text_runs(text):
+        font = chinese_font if chinese else latin_font
+        bounds = draw.textbbox((0, 0), run, font=font, anchor="ls")
+        width += draw.textlength(run, font=font)
+        top = min(top, bounds[1])
+        bottom = max(bottom, bounds[3])
+    return width, top, bottom
+
+
+def _content_fonts(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    chinese_path: Path,
+    latin_path: Path,
+    available_width: int,
+) -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:
+    for size in range(64, 27, -4):
+        chinese_font = _font(chinese_path, size)
+        latin_font = _font(latin_path, size)
+        width, _, _ = _mixed_metrics(draw, text, chinese_font, latin_font)
+        if width <= max(1, available_width - 64):
+            return chinese_font, latin_font
+    return _font(chinese_path, 28), _font(latin_path, 28)
 
 
 def render_scene(
     item: Item,
     font_path: Path,
-    battery: int | None = None,
+    latin_font_path: Path | None = None,
     now: datetime | None = None,
+    size: tuple[int, int] = (VISIBLE_WIDTH, CONTENT_HEIGHT),
 ) -> Image.Image:
-    now = now or datetime.now()
-    image = Image.new("L", (VISIBLE_WIDTH, HEIGHT), 255)
+    del now
+    latin_font_path = latin_font_path or font_path
+    width, height = size
+    image = Image.new("L", size, 255)
     draw = ImageDraw.Draw(image)
 
-    status_font = _font(font_path, 24)
-    title_font = _font(font_path, 64)
-    description_font = _font(font_path, 30)
+    chinese_font, latin_font = _content_fonts(
+        draw, item.text, font_path, latin_font_path, width
+    )
 
-    battery_text = "电量 --%" if battery is None else f"电量 {battery}%"
-    time_text = now.strftime("%H:%M")
-    status_right = f"{battery_text}    {time_text}"
-    bounds = draw.textbbox((0, 0), status_right, font=status_font)
-    draw.text((VISIBLE_WIDTH - (bounds[2] - bounds[0]) - 16, 7), status_right, font=status_font, fill=0)
-
-    title_y = 84 if item.description else 105
-    draw.text((_centered_x(draw, item.title, title_font), title_y), item.title, font=title_font, fill=0)
-    if item.description:
-        draw.text(
-            (_centered_x(draw, item.description, description_font), 183),
-            item.description,
-            font=description_font,
-            fill=0,
-        )
+    text_width, top, bottom = _mixed_metrics(draw, item.text, chinese_font, latin_font)
+    x = (size[0] - text_width) / 2
+    baseline = (height - (bottom - top)) / 2 - top
+    for run, chinese in _text_runs(item.text):
+        font = chinese_font if chinese else latin_font
+        draw.text((x, baseline), run, font=font, fill=0, anchor="ls")
+        x += draw.textlength(run, font=font)
 
     return image.point(lambda pixel: 255 if pixel > THRESHOLD else 0, mode="1")
 
