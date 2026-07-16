@@ -2,6 +2,20 @@
 
 用于支持嵌入式系统的家庭电子小管家宠物，主要目的是给单片机提供post/get的服务，但是也有相对应的网页版本。网页版本会模拟在电子屏幕上的显示效果。
 
+## 效果示例
+
+设备端：
+
+<img src="device_examples.png" alt="电子墨水屏上的图片、健身和 24 点模块" width="800">
+
+网页端：
+
+<img src="server_example.jpg" alt="Home Companian 网页预览和控制界面" width="420">
+
+## 工作流程
+
+![Home Companian 从服务端到客户端的工作流程](overview.png)
+
 ## 目标人群
 
 全家，老少皆宜。只提供简单互动
@@ -42,8 +56,8 @@
 `<library_dir>`存放所有的素材库
 
  - 识字：从用户提供的库里选取汉字。完整字表在 `chinese/full.md`，启用的子集在 `chinese/select.md`。
- - 数学题：待定。在math/
- - 健身：简易动作，在health/
+ - 数学游戏：从 `math/problems.csv` 随机选择 24 点等题目；24 点画面显示游戏标题和四个数字。
+ - 健身：从 `health/exercises.csv` 随机选择徒手动作，显示两帧极简示意图。
  - 一句话鸡汤，在wisdom/
  - 小任务，包括家务和打卡，在items.csv
  - 小图，在images/，包括不同子集，类别在index.csv,图片在各个同名文件夹
@@ -55,6 +69,8 @@
 ### 配置文件
  - `~/.config/home_companian/config.yaml` 存储程序设置和 `library_dir`。
  - `<library_dir>/items.csv` 使用 `id,type,text` 三列存储文字项目。
+ - `<library_dir>/health/exercises.csv` 使用 `id,name,dose,instruction` 四列存储动作。
+ - `<library_dir>/math/problems.csv` 使用 `id,type,question,answer` 四列存储题目；答案暂不显示。
  - `<library_dir>/photos/` 和 `<library_dir>/images/` 只存储已处理的成品图片。
 
 ### 排版
@@ -105,14 +121,36 @@ panel:
 panel:
   template: landscape_3
   slots:
-    1: {module: images, collection: plants}
+    1: {module: images, collections: "plants,animals"}
     2: {module: items}
     3: {module: chinese, source: select}
 ```
 
-`images` 模块从 `<library_dir>/images/<collection>/` 随机选择 1-bit PNG，并避免连续重复。图片尺寸必须与模板区域完全相同；例如 `plants` 中的图片需要预处理为 200x200。
+`images` 模块从 `collection: plants` 指定的单个目录，或从 `collections: "plants,animals"` 指定的多个 `<library_dir>/images/<collection>/` 目录中随机选择处理后的 PNG，并避免连续重复。素材可以是高分辨率灰度图；运行时按模板区域保持比例缩放、白底居中，再转换为 1-bit。集合内的 `raw/` 子目录不参与轮换。
 
 `chinese/full.md` 使用“一年级”至“六年级”的 Markdown 标题，每个标题下连续书写对应汉字，空白会被忽略。`chinese/select.md` 只保存启用的汉字；程序去重并保持首次出现顺序。如果包含非汉字、缺少年级标题，或选择了 `full.md` 中不存在的字，配置加载会报错。
+
+健身模块使用全屏模板时的配置：
+
+```yaml
+panel:
+  template: landscape_1
+  slots:
+    1: {module: health}
+```
+
+每个动作的两帧图片位于 `health/images/<id>/1.png` 和 `2.png`。仓库中的 `health_diagram_utility.py` 可生成当前 8 个原创黑白线稿动作；模块会在全屏和小区域中自动调整排版。画面只显示动作名、次数/时长和两帧姿势，`instruction` 仅保存在 CSV 中。
+
+数学模块可混合两类题，也可以只选一类：
+
+```yaml
+panel:
+  template: landscape_1
+  slots:
+    1: {module: math, type: game24}  # arithmetic / thinking / game24 / all
+```
+
+`answer` 为以后互动预留，第一版不会通过画面或设备响应显示答案。
 
 后续多区域配置将沿用同一结构：
 
@@ -207,4 +245,4 @@ python3 image_utility.py input.png output.png --binarize threshold --threshold 1
 python3 image_utility.py input.jpg output.png --fit contain --autocontrast
 ```
 
-输出始终是指定尺寸的黑白 1-bit PNG，不包含顶部状态栏、8 像素硬件接缝或 framebuffer 旋转。透明区域按白色处理。`--trim 2` 可从输入四边各裁掉 2px，`--content-scale 0.85` 可让主体缩小并居中留白；其他可选参数还包括 `--invert`。
+默认输出是指定尺寸的黑白 1-bit PNG，不包含顶部状态栏、8 像素硬件接缝或 framebuffer 旋转。需要供不同模板复用的高分辨率主图时，使用 `--binarize grayscale`；图片模块会在运行时缩放并完成最终二值化。透明区域按白色处理。`--trim 2` 可从输入四边各裁掉 2px，`--content-scale 0.85` 可让主体缩小并居中留白；其他可选参数还包括 `--invert`。

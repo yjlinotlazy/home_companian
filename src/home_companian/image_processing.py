@@ -27,8 +27,8 @@ def process_image(
         raise ValueError("image size must be positive")
     if fit not in {"cover", "contain"}:
         raise ValueError("fit must be cover or contain")
-    if binarize not in {"dither", "threshold"}:
-        raise ValueError("binarize must be dither or threshold")
+    if binarize not in {"dither", "threshold", "grayscale"}:
+        raise ValueError("binarize must be dither, threshold, or grayscale")
     if not 0 <= threshold <= 255:
         raise ValueError("threshold must be between 0 and 255")
     if trim < 0:
@@ -70,6 +70,8 @@ def process_image(
         fitted = ImageOps.autocontrast(fitted)
     if invert:
         fitted = ImageOps.invert(fitted)
+    if binarize == "grayscale":
+        return fitted
     if binarize == "threshold":
         return fitted.point(lambda pixel: 255 if pixel > threshold else 0, mode="1")
     return fitted.convert("1", dither=Image.Dither.FLOYDSTEINBERG)

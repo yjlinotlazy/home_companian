@@ -47,9 +47,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--binarize",
-        choices=("dither", "threshold"),
+        choices=("dither", "threshold", "grayscale"),
         default="dither",
-        help="photo dithering or hard threshold (default: dither)",
+        help="photo dithering, hard threshold, or processed grayscale master (default: dither)",
     )
     parser.add_argument("--threshold", type=int, default=180)
     parser.add_argument("--autocontrast", action="store_true")
@@ -84,7 +84,10 @@ def main() -> None:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(f"Wrote {args.output} ({processed.width}x{processed.height}, 1-bit PNG)")
+    print(
+        f"Wrote {args.output} "
+        f"({processed.width}x{processed.height}, {processed.mode} PNG)"
+    )
 
 
 if __name__ == "__main__":

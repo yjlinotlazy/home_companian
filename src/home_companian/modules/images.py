@@ -10,6 +10,7 @@ from PIL import Image
 
 from ..config import ConfigError, Settings
 from ..domain import Rect, SlotAssignment
+from ..image_processing import process_image
 
 
 COLLECTION_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -30,22 +31,40 @@ class ImagesModule:
     ) -> str:
         del at
         collection = assignment.option("collection")
-        if collection is None or COLLECTION_NAME.fullmatch(collection) is None:
-            raise ConfigError("images module collection must use letters, numbers, _ or -")
-        directory = settings.library_dir / "images" / collection
-        try:
-            files = tuple(
-                sorted(
-                    path.name
-                    for path in directory.iterdir()
-                    if path.is_file() and path.suffix.lower() == ".png"
-                )
+        collections_option = assignment.option("collections")
+        if collection is not None and collections_option is not None:
+            raise ConfigError("images module must use collection or collections, not both")
+        if collections_option is not None:
+            collections = tuple(
+                dict.fromkeys(part.strip() for part in collections_option.split(","))
             )
-        except OSError as exc:
-            raise ConfigError(f"image collection cannot be opened: {directory}") from exc
-        if not files:
-            raise ConfigError(f"image collection contains no PNG files: {directory}")
-        content_ids = tuple(f"{collection}/{name}" for name in files)
+        elif collection is not None:
+            collections = (collection,)
+        else:
+            collections = ()
+        if not collections or any(
+            COLLECTION_NAME.fullmatch(name) is None for name in collections
+        ):
+            raise ConfigError(
+                "images module collections must use comma-separated letters, numbers, _ or -"
+            )
+
+        content_ids: list[str] = []
+        for name in collections:
+            directory = settings.library_dir / "images" / name
+            try:
+                files = tuple(
+                    sorted(
+                        path.name
+                        for path in directory.iterdir()
+                        if path.is_file() and path.suffix.lower() == ".png"
+                    )
+                )
+            except OSError as exc:
+                raise ConfigError(f"image collection cannot be opened: {directory}") from exc
+            if not files:
+                raise ConfigError(f"image collection contains no PNG files: {directory}")
+            content_ids.extend(f"{name}/{filename}" for filename in files)
         with self._lock:
             candidates = tuple(
                 content_id
@@ -69,13 +88,12 @@ class ImagesModule:
             with Image.open(path) as image:
                 if image.format != "PNG":
                     raise ConfigError(f"image asset must be PNG: {path}")
-                if image.mode != "1":
-                    raise ConfigError(f"image asset must be 1-bit: {path}")
-                if image.size != (rect.width, rect.height):
-                    raise ConfigError(
-                        f"image asset must be {rect.width}x{rect.height}: {path}"
-                    )
-                return image.copy()
+                return process_image(
+                    image,
+                    size=(rect.width, rect.height),
+                    fit="contain",
+                    binarize="threshold",
+                )
         except OSError as exc:
             raise ConfigError(f"image asset cannot be opened: {path}") from exc
 

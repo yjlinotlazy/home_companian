@@ -79,18 +79,20 @@ home_companian_library/
 ```
 
 - `items.csv`：个人提醒和家庭任务的统一文字数据源。
+- `health/exercises.csv`：徒手动作名称、次数/时长和关键提示；两帧主图位于 `health/images/<id>/`。
+- `math/problems.csv`：算术和数学思维题，答案只保存在内容库中，第一版不显示。
 - `photos/`：已处理、可直接上屏的家庭图片。
 - `images/`：已处理、可直接上屏的通用插图、背景和图标。
 
 `photos/` 和 `images/` 只保存成品素材，不保存原图。图片规范为：
 
 - PNG。
-- 与目标模板区域尺寸完全一致；默认全宽内容区为 792x228。
-- 黑白 1-bit。
+- 使用 PNG；推荐保存足够大的已清理灰度主图，以供不同模板复用。
+- 模块按目标区域保持比例缩放、白底居中，再生成黑白 1-bit 画面。
 - 横屏且视觉方向正确。
 - 不包含硬件的 8 像素接缝或 180 度显存映射。
 
-独立的 `image_utility.py` 负责把用户指定的原图转换为区域尺寸一致的 1-bit PNG，支持铺满裁切、白边适配、照片抖动、固定阈值、自动对比度和反色。原图仍由用户自行管理，工具只把成品写入内容库；运行中的服务端不处理原图，也不设置缓存目录。
+独立的 `image_utility.py` 负责把用户指定的原图转换为处理后的 PNG，支持铺满裁切、白边适配、照片抖动、固定阈值、灰度主图、自动对比度和反色。`raw/` 子目录可保留原图但不参与轮换。运行中的服务端只对处理后主图做槽位缩放和最终二值化，不设置缓存目录。
 
 ## 内容选择模式
 
@@ -178,14 +180,18 @@ panel:
 panel:
   template: landscape_3
   slots:
-    1: {module: images, collection: plants}
+    1: {module: images, collections: "plants,animals"}
     2: {module: items}
     3: {module: chinese, source: select}
 ```
 
-`images` 模块从 `<library_dir>/images/<collection>/` 随机选择已经处理好的 PNG，避免连续重复。图片必须是 1-bit PNG，并与所在模板区域尺寸完全一致；模块不会在运行时缩放或重新处理图片。
+`images` 模块可用 `collection` 指定一个图片集合，或用逗号分隔的 `collections` 指定多个集合并统一随机轮换；图片来自 `<library_dir>/images/<collection>/`，并避免连续重复。素材是已处理的 PNG 主图，允许不同尺寸和灰度模式；模块运行时按区域 `contain` 缩放并最终二值化，因此同一素材可用于不同模板。
 
 `chinese/full.md` 必须包含一年级至六年级标题，标题下汉字无需逐字换行；分类目前只供用户参考。`chinese/select.md` 只保存启用汉字。加载时忽略空白、去重并保序，同时拒绝非汉字、缺失年级标题及不属于完整字表的选择。
+
+`health` 模块从 `health/exercises.csv` 随机选择动作并避免连续重复。每个动作使用两张原创极简线稿，画面只显示大号名称、次数/时长和两帧姿势；`instruction` 保存在内容库中但第一版不显示。第一版包含深蹲、俯卧撑、臀桥、鸟狗式、平板支撑、提踵、开合跳和原地高抬腿，不记录完成状态。
+
+`math` 模块从 `math/problems.csv` 随机选择题目并避免连续重复。`type` 可为 `arithmetic`、`thinking`、`game24` 或 `all`。24 点的 `question` 是四个空格分隔的数字，画面显示“24点”标题和这四个数字；`answer` 仅保存解法，不显示。
 
 未来的“屏幕编辑器”是这份配置的图形界面：浏览程序内置模板、查看可用模块、选择模板并把模块分配到数字区域，最终仍写回同一份 `config.yaml`。编辑器不维护第二套状态，也不在第一阶段实现。
 

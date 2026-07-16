@@ -85,6 +85,14 @@ class ImageProcessingTests(unittest.TestCase):
                 self.assertEqual(written.size, (10, 5))
                 self.assertEqual(written.mode, "1")
 
+    def test_grayscale_mode_produces_processed_master(self) -> None:
+        processed = process_image(
+            Image.new("RGB", (20, 10), "gray"),
+            size=(20, 10),
+            binarize="grayscale",
+        )
+        self.assertEqual((processed.size, processed.mode), ((20, 10), "L"))
+
 
 if __name__ == "__main__":
     unittest.main()

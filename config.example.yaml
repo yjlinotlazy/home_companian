@@ -27,7 +27,7 @@ panel:
   slots:
     1:
       module: images
-      collection: plants
+      collections: plants,animals
     2:
       module: items
     3:

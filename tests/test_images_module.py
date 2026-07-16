@@ -38,6 +38,22 @@ class ImagesModuleTests(unittest.TestCase):
             second = module.prepare(self.settings, datetime.now(), self.assignment)
         self.assertEqual((first, second), ("plants/a.png", "plants/b.png"))
 
+    def test_random_selection_can_span_multiple_collections(self) -> None:
+        animals = self.library / "images" / "animals"
+        animals.mkdir()
+        Image.new("1", (200, 200), 255).save(animals / "cat.png")
+        assignment = SlotAssignment(
+            1, "images", (("collections", "plants,animals"),)
+        )
+        module = ImagesModule()
+        with patch(
+            "home_companian.modules.images.random.choice",
+            side_effect=lambda values: values[-1],
+        ):
+            first = module.prepare(self.settings, datetime.now(), assignment)
+            second = module.prepare(self.settings, datetime.now(), assignment)
+        self.assertEqual((first, second), ("animals/cat.png", "plants/b.png"))
+
     def test_renders_preprocessed_asset_without_resizing(self) -> None:
         image = ImagesModule().render(
             self.settings,
@@ -47,14 +63,17 @@ class ImagesModuleTests(unittest.TestCase):
         )
         self.assertEqual((image.size, image.mode), ((200, 200), "1"))
 
-    def test_rejects_asset_with_wrong_dimensions(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "must be 100x100"):
-            ImagesModule().render(
-                self.settings,
-                "plants/a.png",
-                Rect(0, 0, 100, 100),
-                datetime.now(),
-            )
+    def test_resizes_grayscale_master_to_slot_at_runtime(self) -> None:
+        Image.new("L", (400, 100), 0).save(self.collection / "wide.png")
+        rendered = ImagesModule().render(
+            self.settings,
+            "plants/wide.png",
+            Rect(0, 0, 100, 100),
+            datetime.now(),
+        )
+        self.assertEqual((rendered.size, rendered.mode), ((100, 100), "1"))
+        self.assertEqual(rendered.getpixel((50, 0)), 255)
+        self.assertEqual(rendered.getpixel((50, 50)), 0)
 
     def test_rejects_path_traversal(self) -> None:
         with self.assertRaisesRegex(ConfigError, "invalid image content id"):

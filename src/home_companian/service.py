@@ -15,7 +15,14 @@ from PIL import Image
 from .composition import render_panel
 from .config import ConfigError, DEFAULT_CONFIG_PATH, Item, Settings, load_settings
 from .domain import PreparedPanel, PreparedSlot
-from .modules import ChineseModule, ImagesModule, ItemsModule, Module
+from .modules import (
+    ChineseModule,
+    HealthModule,
+    ImagesModule,
+    ItemsModule,
+    MathModule,
+    Module,
+)
 from .rendering import CONTENT_HEIGHT, VISIBLE_WIDTH, image_to_framebuffer
 from .selection import RandomSelector, select_scheduled
 from .status_modules import (
@@ -51,11 +58,15 @@ class DisplayService:
             "items": self.device_items_module,
             "chinese": ChineseModule(),
             "images": ImagesModule(),
+            "health": HealthModule(),
+            "math": MathModule(),
         }
         self.preview_modules: dict[str, Module] = {
             "items": self.preview_items_module,
             "chinese": ChineseModule(),
             "images": ImagesModule(),
+            "health": HealthModule(),
+            "math": MathModule(),
         }
         self.status_modules: dict[str, StatusModule] = {
             "date": DateModule(),

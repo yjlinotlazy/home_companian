@@ -1,0 +1,10 @@
+flowchart TD
+    A["config.yaml<br/>内容库"] --> B["服务端<br/>选择模板和模块"]
+    B --> C["生成下一屏<br/>PNG + framebuffer"]
+    D["网页客户端"] <-->|"preview / 配置"| B
+    C -->|"预览 PNG"| D
+    E["ESP32 定时醒来"] -->|"GET /display.bin"| B
+    C -->|"1-bit framebuffer"| E
+    E --> F["电子墨水屏刷新"]
+    F --> G["休眠至下次检查"]
+    G --> E
