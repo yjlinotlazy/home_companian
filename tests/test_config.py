@@ -2,10 +2,93 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from home_companian.config import ConfigError, load_settings
+from home_companian.config import ConfigError, load_config
+
+
+def resolved_settings(path: Path):
+    config = load_config(path)
+    return config.for_device(config.default_device)
+
+
+def device_sections(presentation: str = "") -> str:
+    presentation = presentation or (
+        "      panel:\n"
+        "        template: landscape_1\n"
+        "        slots:\n"
+        "          1: {module: items}\n"
+    )
+    return (
+        "default_device: wall\n"
+        "channels:\n"
+        "  home:\n"
+        "    mode: scheduled\n"
+        "    schedule:\n"
+        "      - {time: '12:00', item: 1}\n"
+        "    random_items: [1]\n"
+        "devices:\n"
+        "  wall:\n"
+        "    profile: crowpanel_579\n"
+        "    channel: home\n"
+        "    refresh:\n"
+        "      minutes: 60\n"
+        "      active_start: '07:00'\n"
+        "      active_end: '22:00'\n"
+        "    presentation:\n"
+        f"{presentation}"
+    )
 
 
 class ConfigTests(unittest.TestCase):
+    def test_rejects_legacy_top_level_display_config(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n"
+                "mode: random\nrandom_items: [1]\n"
+                "schedule:\n  - {time: '12:00', item: 1}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigError, "channels must be a mapping"):
+                resolved_settings(path)
+
+    def test_selects_device_specific_refresh_and_presentation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            second = (
+                "  desk:\n"
+                "    profile: crowpanel_579\n"
+                "    channel: home\n"
+                "    refresh:\n"
+                "      minutes: 15\n"
+                "      active_start: '08:00'\n"
+                "      active_end: '20:00'\n"
+                "    presentation:\n"
+                "      panel:\n"
+                "        template: landscape_2\n"
+                "        slots:\n"
+                "          1: {module: items}\n"
+            )
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n"
+                + device_sections()
+                + second,
+                encoding="utf-8",
+            )
+            configured = load_config(path).for_device("desk")
+
+        self.assertEqual(configured.device_id, "desk")
+        self.assertEqual(configured.refresh_minutes, 15)
+        self.assertEqual(configured.active_start.hour, 8)
+        self.assertEqual(configured.panel.template, "landscape_2")
+
     def test_loads_minimal_config(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -15,11 +98,10 @@ class ConfigTests(unittest.TestCase):
             )
             path.write_text(
                 "font: /tmp/font.otf\nlibrary_dir: .\n"
-                "schedule:\n  - {time: '12:00', item: 1}\n"
-                "random_items: [1]\n",
+                + device_sections(),
                 encoding="utf-8",
             )
-            settings = load_settings(path)
+            settings = resolved_settings(path)
 
         self.assertEqual(settings.items[0].id, 1)
         self.assertEqual(settings.items[0].type, "personal")
@@ -37,13 +119,21 @@ class ConfigTests(unittest.TestCase):
             )
             path.write_text(
                 "font: /tmp/font.otf\nlibrary_dir: .\n"
-                "status_bar:\n  left: []\n  center:\n    - {module: solar_term}\n"
-                "  right:\n    - {module: time, format: '%H:%M'}\n"
-                "schedule:\n  - {time: '12:00', item: 1}\n"
-                "random_items: [1]\n",
+                + device_sections(
+                    "      status_bar:\n"
+                    "        left: []\n"
+                    "        center:\n"
+                    "          - {module: solar_term}\n"
+                    "        right:\n"
+                    "          - {module: time, format: '%H:%M'}\n"
+                    "      panel:\n"
+                    "        template: landscape_1\n"
+                    "        slots:\n"
+                    "          1: {module: items}\n"
+                ),
                 encoding="utf-8",
             )
-            configured = load_settings(path)
+            configured = resolved_settings(path)
 
         self.assertEqual(configured.status_bar.left, ())
         self.assertEqual(configured.status_bar.center[0].module, "solar_term")
@@ -60,11 +150,10 @@ class ConfigTests(unittest.TestCase):
                 "font: /tmp/medium.ttf\n"
                 "fonts:\n  文楷: /tmp/medium.ttf\n  黑体: /tmp/sans.otf\n"
                 "library_dir: .\n"
-                "schedule:\n  - {time: '12:00', item: 1}\n"
-                "random_items: [1]\n",
+                + device_sections(),
                 encoding="utf-8",
             )
-            settings = load_settings(path)
+            settings = resolved_settings(path)
 
         self.assertEqual([choice.name for choice in settings.fonts], ["文楷", "黑体"])
 
@@ -77,13 +166,15 @@ class ConfigTests(unittest.TestCase):
             path = root / "config.yaml"
             path.write_text(
                 "font: /tmp/font.otf\nlibrary_dir: .\n"
-                "panel:\n  template: landscape_1\n"
-                "  slots:\n    1: {module: items, mode: random}\n"
-                "schedule:\n  - {time: '12:00', item: 1}\n"
-                "random_items: [1]\n",
+                + device_sections(
+                    "      panel:\n"
+                    "        template: landscape_1\n"
+                    "        slots:\n"
+                    "          1: {module: items, mode: random}\n"
+                ),
                 encoding="utf-8",
             )
-            settings = load_settings(path)
+            settings = resolved_settings(path)
 
         self.assertEqual(settings.panel.template, "landscape_1")
         self.assertEqual(settings.panel.slots[0].module, "items")
@@ -104,7 +195,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ConfigError, "must match"):
-                load_settings(path)
+                resolved_settings(path)
 
     def test_rejects_duplicate_ids(self) -> None:
         with TemporaryDirectory() as directory:
@@ -121,7 +212,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ConfigError, "duplicate item id"):
-                load_settings(path)
+                resolved_settings(path)
 
     def test_rejects_wrong_csv_columns(self) -> None:
         with TemporaryDirectory() as directory:
@@ -137,7 +228,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ConfigError, "columns must be exactly"):
-                load_settings(path)
+                resolved_settings(path)
 
     def test_rejects_unknown_item_type(self) -> None:
         with TemporaryDirectory() as directory:
@@ -153,7 +244,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ConfigError, "personal or family_task"):
-                load_settings(path)
+                resolved_settings(path)
 
 
 if __name__ == "__main__":

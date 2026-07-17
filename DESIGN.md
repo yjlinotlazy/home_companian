@@ -1,12 +1,107 @@
-# 家宠设计文档
+# Home Companian 设计文档
 
 ## 产品目标
 
-家宠是运行在家庭电子墨水屏上的只读公告栏。服务端为 ESP32 提供可直接显示的画面，同时提供网页预览。
+家宠是运行在家庭服务器上的多设备显示项目。服务端持有内容、调度、排版和渲染逻辑；CrowPanel、Kindle 及未来设备是稳定、可复用的薄客户端。
 
-第一版优先显示打卡项目。暂不支持确认、取消、领取任务或记录完成状态，只要求设备能够定期获取并刷新内容。
+当前 baseline 已打通 CrowPanel 的定时拉取与电子墨水屏刷新，支持文字、图片、识字、健身和数学模块。下一阶段不改变现有功能，而是把它迁移到可支持 Kindle 和多型号设备的通用边界上。
 
-## 硬件约束
+## 架构原则
+
+1. 服务端优先：内容选择、调度、布局、字体、图像处理和输出编码均在服务端。
+2. 薄客户端：设备只负责联网、请求 Frame、显示、上报结果/事件和电源管理。
+3. 设备无关 Scene：业务内容不包含 Kindle 或 CrowPanel 的像素坐标和编码细节。
+4. Forge 专注于组合与渲染：不吸收 HTTP、业务调度、设备状态或事件业务逻辑。
+5. Frame 不可变：已生成的 Frame 不会被覆盖；ACK 只更新设备投递状态。
+6. 渲染与传输分离：PNG、raw bitmap、HTTP 或未来 MQTT 都不改变应用和 Scene。
+7. 扩展设备不改应用：新型号优先只增加 Device Profile；新硬件系列才增加 backend/encoder。
+
+## 目标分层
+
+```text
+Application / Modules
+        │
+        ▼
+Scene fragments
+        │
+        ▼
+Channel Scene
+        │
+        ▼
+Forge + Device Profile
+        │
+        ▼
+Immutable Frame
+        │
+        ▼
+Protocol
+        │
+        ▼
+Device
+```
+
+### Application 与模块
+
+Home Companian 是整个产品，也是当前的应用。items、images、chinese、health 和 math 等模块拥有各自的内容加载、验证和选择逻辑。模块产生语义内容，不产生最终设备像素。
+
+随机/定时调度、推荐、AI 及未来互动属于 Application 层，不属于 Forge。
+
+### Scene 与 Scene fragment
+
+Scene fragment 是单个模块的已选定内容，例如文字、图像素材引用、健身动作或一组 24 点数字。Scene 是一次应显示的完整语义快照，包含 fragment、语义角色和必要元数据，但不包含绝对像素坐标、硬件旋转或输出格式。
+
+Scene 生成后不可变。同一 Scene 可以由 Forge 为不同 Device Profile 生成不同 Frame。
+
+### Channel
+
+Channel 表示一组设备共享的逻辑内容流。例如 Kindle 和 CrowPanel 都订阅 home，它们共享当前/下一 Scene，但拥有独立的 Frame、刷新时间、投递状态和 ACK。
+
+设备离线后重新连接时默认取得频道的最新目标 Scene，不补发已错过的每一帧。手动“更改”作用于 Channel 的下一 Scene，不直接覆盖任何设备已显示的 Frame。
+
+### Forge
+
+Forge 是 Home Companian 内部的组合与渲染引擎，不是 repo 或整个产品的名字。它负责：
+
+- 根据 Device Profile 选择 presentation/模板。
+- 把 Scene fragments 映射到布局区域。
+- 状态栏等统一画面组合。
+- 字体、排版、缩放、二值化和抖动。
+- 调用目标 encoder 生成设备所需的 Frame payload。
+
+Forge 不负责内容推荐、随机/定时选择、HTTP 路由、ACK 存储、事件业务处理或设备休眠。
+
+### Device Instance、Profile 与 Backend
+
+- Device Instance：具体设备的稳定 ID，绑定 profile、channel、授权信息和刷新策略。
+- Device Profile：可复用的型号能力描述，包括 viewport、方向、色深、safe area、输出 MIME type、刷新限制和输入 capabilities。
+- Display Backend / Encoder：将 Forge 的标准渲染结果编码为 PNG、CrowPanel raw 1-bit framebuffer 或未来格式。
+
+多个 Kindle 型号应尽量共享 kindle_png backend，只使用不同 profile。CrowPanel 的接缝和旋转映射属于 crowpanel_1bit encoder。
+
+### Frame
+
+Frame 是针对某个 Scene 和 Device Profile 生成的不可变输出，至少包含 frame_id、scene_id、profile_id、MIME type、payload/hash 和生成时间。PNG 与 raw 1-bit 是并行格式，不是全局演进阶段。
+
+### Protocol 与 Event
+
+Protocol 只负责传输 Frame、ACK 和 Event，不调用排版细节。第一个通用协议使用 HTTP pull，具体契约见 [PROTOCOL.md](PROTOCOL.md)。
+
+Event 使用通用类型，如 wake、sleep、tap、swipe 和 button。Protocol 层必须知道来源 device_id 和关联 frame_id，但 Application 不应依赖 Kindle 或 CrowPanel 的硬件名称。
+
+## 目标代码边界
+
+```text
+src/home_companian/
+├── modules/        # 内容加载、验证、选择和 Scene fragments
+├── application/    # Channel、调度和业务事件
+├── forge/          # composition、presentation、rendering、encoders
+├── protocol/       # HTTP Frame/ACK/Event 契约
+└── devices/        # instances、profiles、capabilities、投递状态
+```
+
+具体目录会按迁移需要逐步建立，不为满足目录图而一次性搬动所有文件。设备端客户端可以因工具链不同继续放在独立项目中；本 repo 只要求服务端 Device Profile 和协议契约稳定。
+
+## 当前 CrowPanel Profile
 
 - 屏幕：5.79 inch 黑白 e-ink，横屏显示。
 - 可见分辨率：792x272。
@@ -17,7 +112,7 @@
 
 参考硬件测试项目：`/home/yli/Embedded/esp32/crowpanel-579-epaper`。
 
-## 第一版架构
+## 当前 CrowPanel Baseline
 
 ### 服务端
 
@@ -28,7 +123,7 @@
 - 文字条目和成品图片存储在用户指定的内容库中。
 - HTTP 服务同时提供设备画面和网页预览。
 
-计划提供以下接口：
+当前 HTTP 接口中，只有 `/display.bin` 是兼容接口；其余是当前网页 UI 接口：
 
 - `GET /display.bin`：返回 `application/octet-stream`，响应体必须恰好为 27,200 字节；`X-Next-Check-Seconds` 响应头告诉设备下次唤醒时间。
 - `GET /preview.png`：默认返回服务端最后一次为设备生成的完整 PNG 画面；带手动预览参数时返回临时预览。
@@ -47,6 +142,17 @@
 5. 屏幕和设备进入深睡，按服务端给出的秒数唤醒。
 
 下载失败或响应长度错误时不清屏，保留上一次画面，并使用 30 分钟的默认值再次检查。
+
+## Kindle 6 inch Profile
+
+- Profile ID：`kindle_6_212ppi`。
+- 方向与分辨率：竖屏 758×1024。
+- 屏幕：6 inch，约 4:3，212 PPI。
+- 灰度：16-level grayscale。
+- Frame：`image/png`，758×1024、8-bit grayscale 容器，像素量化到最多 16 级。
+- 当前 presentation：48px 状态栏和 758×976 的 `portrait_1` 全屏内容区。
+
+当前实例 ID 为 `kindleGen7dk`，服务端已支持 `GET /v1/devices/kindleGen7dk/next` 和显示 ACK。Kindle 设备端客户端仍需验证实际运行入口并实现下载、显示和定时检查。
 
 ## 内容模型
 
@@ -96,19 +202,19 @@ home_companian_library/
 
 ## 内容选择模式
 
-`scheduled` 和 `random` 是两种全局模式，通过配置切换，第一版不混用。
+当前实现中，`scheduled` 和 `random` 是两种全局模式，通过配置切换且不混用。迁移到多设备模型后，选择模式属于 Channel/Application 配置；Device Instance 只决定何时获取该频道的最新 Scene。
 
 ### 定时模式
 
 定时配置通过项目 `id` 引用内容：
 
 ```yaml
-mode: scheduled
-schedule:
-  - time: "12:00"
-    item: 1
-  - time: "13:00"
-    item: 2
+channels:
+  home:
+    mode: scheduled
+    schedule:
+      - {time: "12:00", item: 1}
+      - {time: "13:00", item: 2}
 ```
 
 每次设备请求时，服务端根据当前本地时间选择最近一个已经开始的项目。例如 12:40 请求时仍选择 12:00 的项目。画面保持到设备下一次成功刷新，不需要单独的持续时间或过期时间字段。
@@ -116,31 +222,34 @@ schedule:
 ### 随机模式
 
 ```yaml
-mode: random
-refresh_minutes: 30
-active_start: "07:00"
-active_end: "22:00"
-random_items:
-  - 1
-  - 2
+channels:
+  home:
+    mode: random
+    random_items: [1, 2]
+devices:
+  wall_panel:
+    refresh:
+      minutes: 30
+      active_start: "07:00"
+      active_end: "22:00"
 ```
 
-设备在 07:00–22:00 之间每 30 分钟请求一次，服务端从项目池选择一个项目。尽量避免连续两次显示相同项目。22:00 后设备直接休眠到次日 07:00。
+CrowPanel 当前在 07:00–22:00 之间每 30 分钟请求一次，服务端从项目池选择一个项目。尽量避免连续两次显示相同项目。22:00 后设备直接休眠到次日 07:00。
 
-`refresh_minutes`、`active_start` 和 `active_end` 共同决定服务端返回的下次检查时间；服务端不主动推送。
+`refresh.minutes`、`active_start` 和 `active_end` 共同决定该设备的下次检查时间；服务端不主动推送。
 
 ## 模板、模块与编排
 
-未来的多区域画面分为三个独立概念：
+当前 CrowPanel 多区域画面分为三个独立概念：
 
-- 模板由程序提供，定义屏幕规格和固定 topology。区域使用模板内部的数字编号，例如 `1`、`2`、`3`；编号不在不同模板之间表达相同语义。
-- 屏幕顶部固定预留 44px 全局状态栏。状态栏不属于模板；当前 792x272 屏幕的模板内容区统一为 792x228。
-- 模块负责加载一种内容、预先选择下一条状态，并在收到的矩形区域内渲染。模块不知道区域的绝对坐标。
+- 模板由程序提供，定义 `crowpanel_579` presentation 的固定 topology。区域使用模板内部的数字编号，例如 `1`、`2`、`3`；编号不在不同模板之间表达相同语义。
+- CrowPanel 屏幕顶部固定预留 44px 状态栏。状态栏不属于内容模板；792x272 屏幕的模板内容区统一为 792x228。
+- 模块当前同时负责选择内容和在矩形区域内渲染。目标架构会把前者变成 Scene fragment，把后者迁入 Forge。
 - 编排保存在用户的 `config.yaml` 中，记录当前选择的内置模板以及 `slot → module` 分配。用户可以选择模板和模块分配，但不能在配置中修改模板坐标。
 
-模板属于应用和屏幕规格，不属于 `<library_dir>`。内容库只保存用户素材和各模块的数据源。
+模板/presentation 属于 Forge 和 Device Profile，不属于 `<library_dir>`。内容库只保存用户素材和各模块的数据源。
 
-状态栏使用另一套独立模块系统，不与内容模块共享接口、注册表或配置。状态栏模块只生成紧凑的横向内容，由状态栏布局器按 `left`、`center`、`right` 三组排列；内容模块仍按模板矩形区域渲染，并参与 `PreparedPanel`。状态栏不参与下一屏内容预生成，而是按画面的目标时间即时渲染。
+状态栏使用另一套独立模块系统，不与内容模块共享接口、注册表或配置。状态栏模块只生成紧凑的横向内容，由状态栏布局器按 `left`、`center`、`right` 三组排列；内容模块对应 Scene fragments。状态栏不参与下一屏内容预生成，而是由 Forge 按画面的目标时间即时渲染。
 
 ```yaml
 status_bar:
@@ -153,7 +262,7 @@ status_bar:
 
 三组内部按配置顺序从左到右显示，左右边距为 16px，模块间距为 12px；模块越界或不同组发生重叠时直接报错。内置状态栏模块包括 `weekday`、`time`、`solar_term` 和 `date`。当前画面中央显示最近已经开始的二十四节气，右上角显示星期；`time` 和 `date` 保留实现但默认配置不显示。节气根据太阳视黄经计算，并按 UTC+8 的传统历法日期切换。
 
-当前已用单区域 `landscape_1`、双区域 `landscape_2` 和三区域 `landscape_3` 打通链路。内存中的下一屏使用 `PreparedPanel`：保存模板 ID、每个区域预先选定的模块内容及下一次刷新时间，但不缓存 bitmap。网页预览只查看该对象，设备请求时消费并立即生成下一屏；服务重启或模板/编排变化时清空。字体变化只触发重新渲染，不重新选择内容。
+当前已用单区域 `landscape_1`、双区域 `landscape_2` 和三区域 `landscape_3` 打通链路。内存中的下一屏已改为不可变 Scene；模块选择结果保存为 Scene fragments，模板和 slot 映射由 Forge 的 Presentation 独立持有。
 
 当前配置：
 
@@ -193,9 +302,11 @@ panel:
 
 `math` 模块从 `math/problems.csv` 随机选择题目并避免连续重复。`type` 可为 `arithmetic`、`thinking`、`game24` 或 `all`。24 点的 `question` 是四个空格分隔的数字，画面显示“24点”标题和这四个数字；`answer` 仅保存解法，不显示。
 
-未来的“屏幕编辑器”是这份配置的图形界面：浏览程序内置模板、查看可用模块、选择模板并把模块分配到数字区域，最终仍写回同一份 `config.yaml`。编辑器不维护第二套状态，也不在第一阶段实现。
+未来的“屏幕编辑器”是 presentation 配置的图形界面：浏览程序内置模板、查看 Scene 中的语义模块，并为某个 Device Profile 配置模块到区域的映射。编辑器仍写回同一份配置，不维护第二套状态。
 
 ## 网页预览
+
+以下是当前单设备 baseline 行为：
 
 - 网页同时提供随机预览和定时预览，不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
@@ -207,7 +318,9 @@ panel:
 - 网页随机预览和设备随机选择使用独立状态，预览不会提前消耗或改变设备的下一个随机结果。
 - `fonts` / `font` 保存中文字体候选和当前选择；`latin_fonts` / `latin_font` 保存非中文字体候选和当前选择。网页的两个下拉菜单写回各自选择，永久影响网页和设备画面。
 - 网页显示下一次刷新时间和缩略预览。随机模式的下一条内容预先保存在服务内存中：网页只查看，设备请求时消费并生成再下一条；服务重启后清空。
-- 最后一次设备画面写入 `~/.local/state/home_companian/current.png`，服务重启后仍可恢复；下一屏状态仍只保存在内存中。设备从未请求过画面时，默认预览返回“尚无设备画面”，绝不拿下一屏冒充当前画面。
+- `wall_panel` 最后一次画面继续写入 `~/.local/state/home_companian/current.png`，其他设备按设备写入 `current-<device_id>.png`。服务重启后仍可恢复；下一屏状态仍只保存在内存中。设备从未请求过画面时，默认预览返回“尚无设备画面”，绝不拿下一屏冒充当前画面。
+
+多设备版本中，网页必须先选择 Device Instance。当前画面、下一帧预览、下次刷新时间和 ACK 状态都按设备显示；内容候选和手动“更改”按 Channel 显示。服务端不能用某台设备最后生成的 PNG 冒充另一台设备的当前画面。
 
 ## 页面内容
 
@@ -231,22 +344,51 @@ library_dir: /home/yli/Dropbox/home_companian_library
 
 `~/.config` 不存放文字条目、照片或通用图片。
 
-## 非目标
+多设备配置使用以下结构：
 
-以下内容不属于第一版：
+```yaml
+default_device: wall_panel
+channels:
+  home:
+    mode: random
+
+devices:
+  wall_panel:
+    profile: crowpanel_579
+    channel: home
+    refresh:
+      minutes: 30
+      active_start: "07:00"
+      active_end: "22:00"
+    presentation:
+      status_bar: {}
+      panel:
+        template: landscape_3
+        slots:
+          1: {module: images, collections: "plants,animals"}
+          2: {module: items}
+          3: {module: chinese, source: select}
+```
+
+内置 Device Profile 与用户的 Device Instance 分开保存。不同设备可以选择不同刷新窗口、状态栏、模板和模块；用户只选择 profile，不复制硬件参数。旧的顶层显示配置不再兼容。
+
+## 当前阶段非目标
+
+以下内容不属于当前多设备重构阶段：
 
 - 打卡完成记录。
-- 确认、取消、方向键或菜单交互。
 - 家务领取及奖币。
-- 相册、宠物、植物、数学题等其他内容类型。
-- 服务端定时推送。
-- 多种屏幕规格适配。
+- 完整触摸手势业务和设备端菜单。
+- WebSocket、MQTT 或服务端 push。
+- Dirty rectangle 和局部刷新优化。
+- 自动发现未知设备型号。
 - 原始照片或原始图片管理。
-- 图片预处理流程。
-- 内容缓存。
+- 持久化素材缓存；处理后的素材仍由内容库管理。
 - 自定义模板 topology。
-- 屏幕编辑器；第一阶段仅提供 YAML 编排。
+- 屏幕编辑器；当前先提供 YAML presentation 配置。
 
 ## 待确认
 
 - Wi-Fi 凭据和服务器地址目前通过 ESP-IDF 配置写入固件，后续再决定是否支持设备端配置。
+- Kindle 客户端采用浏览器页面、越狱扩展还是其他显示入口，需要在实现 Device Profile 前验证。
+- 多设备认证和首次注册方式尚未确定；协议先保留稳定的 `device_id` 边界。

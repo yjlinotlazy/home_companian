@@ -1,10 +1,14 @@
 flowchart TD
-    A["config.yaml<br/>内容库"] --> B["服务端<br/>选择模板和模块"]
-    B --> C["生成下一屏<br/>PNG + framebuffer"]
-    D["网页客户端"] <-->|"preview / 配置"| B
-    C -->|"预览 PNG"| D
-    E["ESP32 定时醒来"] -->|"GET /display.bin"| B
-    C -->|"1-bit framebuffer"| E
-    E --> F["电子墨水屏刷新"]
-    F --> G["休眠至下次检查"]
-    G --> E
+    M["内容模块<br/>items · images · health · math"] --> SF["Scene fragments<br/>设备无关的语义内容"]
+    A["Application<br/>随机 · 定时 · 推荐"] --> S["Channel Scene<br/>共享的逻辑画面"]
+    SF --> S
+    S --> F["Forge<br/>组合 · 排版 · 渲染 · 编码"]
+    P["Device Profiles<br/>尺寸 · 灰度 · capabilities"] --> F
+    F --> KF["Kindle Frame<br/>PNG"]
+    F --> CF["CrowPanel Frame<br/>1-bit framebuffer"]
+    KF --> H["HTTP Protocol<br/>next · ACK · Events"]
+    CF --> H
+    H --> K["Kindle<br/>薄客户端"]
+    H --> C["CrowPanel ESP32<br/>薄客户端"]
+    K -. "ACK / Events" .-> H
+    C -. "ACK / Events" .-> H

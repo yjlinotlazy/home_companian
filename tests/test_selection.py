@@ -3,12 +3,15 @@ from pathlib import Path
 import unittest
 
 from home_companian.config import FontChoice, Item, ScheduleEntry, Settings
-from home_companian.domain import PanelConfig, SlotAssignment
+from home_companian.domain import PanelConfig, SlotAssignment, StatusBarConfig
 from home_companian.selection import RandomSelector, select_scheduled
 
 
 def settings(mode: str = "scheduled") -> Settings:
     return Settings(
+        device_id="wall",
+        profile_id="crowpanel_579",
+        channel_id="home",
         mode=mode,
         font=Path("/tmp/font.otf"),
         fonts=(FontChoice("默认", Path("/tmp/font.otf")),),
@@ -22,6 +25,7 @@ def settings(mode: str = "scheduled") -> Settings:
         schedule=(ScheduleEntry(time(12), 1), ScheduleEntry(time(13), 2)),
         random_items=(1, 2),
         panel=PanelConfig("landscape_1", (SlotAssignment(1, "items"),)),
+        status_bar=StatusBarConfig(),
     )
 
 

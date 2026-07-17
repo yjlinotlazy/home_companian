@@ -12,9 +12,10 @@ import yaml
 
 from PIL import Image
 
-from .composition import render_panel
-from .config import ConfigError, DEFAULT_CONFIG_PATH, Item, Settings, load_settings
-from .domain import PreparedPanel, PreparedSlot
+from .config import Config, ConfigError, DEFAULT_CONFIG_PATH, Item, Settings, load_config
+from .devices import get_device_profile
+from .forge.engine import Forge
+from .forge.models import Frame, Presentation, Scene, SceneFragment
 from .modules import (
     ChineseModule,
     HealthModule,
@@ -23,7 +24,6 @@ from .modules import (
     MathModule,
     Module,
 )
-from .rendering import CONTENT_HEIGHT, VISIBLE_WIDTH, image_to_framebuffer
 from .selection import RandomSelector, select_scheduled
 from .status_modules import (
     DateModule,
@@ -39,7 +39,7 @@ from .templates import validate_panel
 class RenderedDisplay:
     item_id: int
     image: Image.Image
-    framebuffer: bytes
+    frame: Frame
 
 
 class DisplayService:
@@ -47,11 +47,20 @@ class DisplayService:
         self,
         config_path: Path = DEFAULT_CONFIG_PATH,
         current_display_path: Path | None = None,
+        device_id: str | None = None,
     ) -> None:
         self.config_path = config_path
-        self.current_display_path = current_display_path or Path(
-            "~/.local/state/home_companian/current.png"
-        ).expanduser()
+        self.device_id = device_id or load_config(config_path).default_device
+        if current_display_path is None:
+            filename = (
+                "current.png"
+                if self.device_id == "wall_panel"
+                else f"current-{self.device_id}.png"
+            )
+            current_display_path = Path(
+                f"~/.local/state/home_companian/{filename}"
+            ).expanduser()
+        self.current_display_path = current_display_path
         self.device_items_module = ItemsModule(RandomSelector())
         self.preview_items_module = ItemsModule(RandomSelector())
         self.device_modules: dict[str, Module] = {
@@ -74,20 +83,34 @@ class DisplayService:
             "time": TimeModule(),
             "weekday": WeekdayModule(),
         }
+        self.forge = Forge()
         self._config_write_lock = Lock()
-        self._next_panel_lock = Lock()
-        self._next_panel: PreparedPanel | None = None
-        self._next_panel_key: tuple[object, ...] | None = None
-        self._next_panel_forced = False
+        self._next_scene_lock = Lock()
+        self._next_scene: Scene | None = None
+        self._next_scene_key: tuple[object, ...] | None = None
+        self._next_scene_forced = False
         self._current_display_lock = Lock()
         self._current_display = self._load_current_display()
+        self._delivery_lock = Lock()
+        self._pending_display: RenderedDisplay | None = None
+        self._last_ack: tuple[str, str] | None = None
 
-    def settings(self) -> Settings:
-        settings = load_settings(self.config_path)
+    def config(self) -> Config:
+        return load_config(self.config_path)
+
+    def settings(self, device_id: str | None = None) -> Settings:
+        config = self.config()
+        selected_device = device_id or self.device_id
+        settings = config.for_device(selected_device)
+        profile = get_device_profile(settings.profile_id)
         template = validate_panel(settings.panel)
-        if (template.width, template.height) != (VISIBLE_WIDTH, CONTENT_HEIGHT):
+        if (template.width, template.height) != (
+            profile.width,
+            profile.content_height,
+        ):
             raise ConfigError(
-                f"selected template must be {VISIBLE_WIDTH}x{CONTENT_HEIGHT}"
+                f"selected template must be {profile.width}x{profile.content_height} "
+                f"for profile {profile.id}"
             )
         return settings
 
@@ -97,6 +120,7 @@ class DisplayService:
         preview_random: bool = False,
         preview_item_id: int | None = None,
         device: bool = False,
+        remember_device: bool = True,
         now: datetime | None = None,
     ) -> RenderedDisplay:
         settings = self.settings()
@@ -132,32 +156,57 @@ class DisplayService:
             item = self.preview_items_module.resolve(settings, content_id)
         else:
             if device:
-                forced_panel = self._consume_forced_panel(settings, now)
-                if forced_panel is not None:
-                    rendered = self._render_panel(forced_panel, settings, display_now)
-                    self._remember_current(rendered)
+                forced_scene = self._consume_forced_scene(settings, now)
+                if forced_scene is not None:
+                    rendered = self._render_scene(forced_scene, settings, display_now)
+                    if remember_device:
+                        self._remember_current(rendered)
                     return rendered
             if settings.mode == "scheduled":
                 item = select_scheduled(settings, now.time())
             elif device:
-                panel = self._consume_next_panel(settings, now)
-                rendered = self._render_panel(panel, settings, display_now)
-                self._remember_current(rendered)
+                scene = self._consume_next_scene(settings, now)
+                rendered = self._render_scene(scene, settings, display_now)
+                if remember_device:
+                    self._remember_current(rendered)
                 return rendered
             else:
                 assignment = self._items_assignment(settings)
                 content_id = self.preview_items_module.prepare(settings, now, assignment)
                 item = self.preview_items_module.resolve(settings, content_id)
 
-        panel = self._panel_for_item(settings, item)
-        rendered = self._render_panel(panel, settings, display_now)
-        if device:
+        scene = self._scene_for_item(settings, item)
+        rendered = self._render_scene(scene, settings, display_now)
+        if device and remember_device:
             self._remember_current(rendered)
         return rendered
 
     def render_current(self) -> RenderedDisplay | None:
         with self._current_display_lock:
             return self._current_display
+
+    def deliver(self, now: datetime | None = None) -> RenderedDisplay:
+        with self._delivery_lock:
+            if self._pending_display is None:
+                self._pending_display = self.render(
+                    device=True,
+                    remember_device=False,
+                    now=now,
+                )
+            return self._pending_display
+
+    def acknowledge(self, frame_id: str, status: str) -> None:
+        if status not in {"displayed", "failed"}:
+            raise ValueError("ack status must be displayed or failed")
+        with self._delivery_lock:
+            if self._last_ack == (frame_id, status):
+                return
+            if self._pending_display is None or self._pending_display.frame.id != frame_id:
+                raise ValueError(f"unknown pending frame: {frame_id}")
+            if status == "displayed":
+                self._remember_current(self._pending_display)
+                self._pending_display = None
+            self._last_ack = (frame_id, status)
 
     def _remember_current(self, rendered: RenderedDisplay) -> None:
         with self._current_display_lock:
@@ -181,32 +230,36 @@ class DisplayService:
         try:
             with Image.open(self.current_display_path) as source:
                 image = source.convert("1")
-            framebuffer = image_to_framebuffer(image)
-        except (OSError, ValueError):
+            profile = get_device_profile(self.settings().profile_id)
+            frame = self.forge.encode(image, "restored-current", profile, datetime.now())
+        except (OSError, ValueError, ConfigError):
             return None
-        return RenderedDisplay(item_id=0, image=image, framebuffer=framebuffer)
+        return RenderedDisplay(item_id=0, image=image, frame=frame)
 
     def render_next(self, now: datetime | None = None) -> RenderedDisplay:
         settings = self.settings()
         now = now or datetime.now()
         next_at = self._next_check_at(settings, now)
-        if self._has_forced_panel(settings):
-            panel = self._peek_next_panel(settings, now)
+        if self._has_forced_scene(settings):
+            scene = self._peek_next_scene(settings, now)
         elif settings.mode == "random":
-            panel = self._peek_next_panel(settings, now)
+            scene = self._peek_next_scene(settings, now)
         else:
             item = select_scheduled(settings, next_at.time())
-            panel = self._panel_for_item(settings, item, next_at)
-        return self._render_panel(panel, settings, next_at)
+            scene = self._scene_for_item(settings, item, next_at)
+        return self._render_scene(scene, settings, next_at)
 
-    def _render_panel(
+    def _render_scene(
         self,
-        panel: PreparedPanel,
+        scene: Scene,
         settings: Settings,
         display_now: datetime,
     ) -> RenderedDisplay:
-        image = render_panel(
-            panel,
+        profile = get_device_profile(settings.profile_id)
+        output = self.forge.render(
+            scene,
+            Presentation.from_panel(settings.panel),
+            profile,
             settings,
             display_now,
             self.device_modules,
@@ -214,34 +267,42 @@ class DisplayService:
         )
         item_id = next(
             (
-                slot.content_id
-                for slot in panel.slots
-                if slot.module == ItemsModule.name and type(slot.content_id) is int
+                fragment.content_id
+                for fragment in scene.fragments
+                if fragment.module == ItemsModule.name
+                and type(fragment.content_id) is int
             ),
             0,
         )
         return RenderedDisplay(
             item_id=item_id,
-            image=image,
-            framebuffer=image_to_framebuffer(image),
+            image=output.image,
+            frame=output.frame,
         )
 
-    def _panel_for_item(
+    def _scene_for_item(
         self,
         settings: Settings,
         item: Item,
         next_at: datetime | None = None,
-    ) -> PreparedPanel:
+    ) -> Scene:
         at = next_at or datetime.now()
-        slots: list[PreparedSlot] = []
-        for assignment in settings.panel.slots:
+        fragments: list[SceneFragment] = []
+        for index, assignment in enumerate(settings.panel.slots):
             if assignment.module == ItemsModule.name:
                 content_id: int | str = item.id
             else:
                 module = self.preview_modules[assignment.module]
                 content_id = module.prepare(settings, at, assignment)
-            slots.append(PreparedSlot(assignment.slot_id, assignment.module, content_id))
-        return PreparedPanel(settings.panel.template, tuple(slots), next_at)
+            fragments.append(
+                SceneFragment(
+                    f"fragment-{index}",
+                    assignment.module,
+                    content_id,
+                    assignment.module,
+                )
+            )
+        return Scene.create(tuple(fragments), next_at)
 
     def change(self, item_id: int, now: datetime | None = None) -> datetime:
         settings = self.settings()
@@ -252,10 +313,10 @@ class DisplayService:
         now = now or datetime.now()
         next_at = self._next_check_at(settings, now)
         item = next(item for item in settings.items if item.id == item_id)
-        with self._next_panel_lock:
-            self._next_panel = self._panel_for_item(settings, item, next_at)
-            self._next_panel_key = self._panel_key(settings)
-            self._next_panel_forced = True
+        with self._next_scene_lock:
+            self._next_scene = self._scene_for_item(settings, item, next_at)
+            self._next_scene_key = self._scene_key(settings)
+            self._next_scene_forced = True
         return next_at
 
     def select_font(self, group: str, name: str) -> Path:
@@ -321,76 +382,86 @@ class DisplayService:
 
         return next_check
 
-    def _peek_next_panel(self, settings: Settings, now: datetime) -> PreparedPanel:
-        with self._next_panel_lock:
-            return self._ensure_next_panel_locked(settings, now)
+    def _peek_next_scene(self, settings: Settings, now: datetime) -> Scene:
+        with self._next_scene_lock:
+            return self._ensure_next_scene_locked(settings, now)
 
-    def _consume_next_panel(self, settings: Settings, now: datetime) -> PreparedPanel:
-        with self._next_panel_lock:
-            current = self._ensure_next_panel_locked(settings, now)
+    def _consume_next_scene(self, settings: Settings, now: datetime) -> Scene:
+        with self._next_scene_lock:
+            current = self._ensure_next_scene_locked(settings, now)
             next_at = self._next_check_at(settings, now)
-            self._next_panel = self._prepare_panel(settings, next_at)
-            self._next_panel_key = self._panel_key(settings)
-            self._next_panel_forced = False
+            self._next_scene = self._prepare_scene(settings, next_at)
+            self._next_scene_key = self._scene_key(settings)
+            self._next_scene_forced = False
             return current
 
-    def _ensure_next_panel_locked(
+    def _ensure_next_scene_locked(
         self,
         settings: Settings,
         now: datetime,
-    ) -> PreparedPanel:
-        key = self._panel_key(settings)
-        if self._next_panel is None or self._next_panel_key != key:
+    ) -> Scene:
+        key = self._scene_key(settings)
+        if self._next_scene is None or self._next_scene_key != key:
             next_at = self._next_check_at(settings, now)
-            self._next_panel = self._prepare_panel(settings, next_at)
-            self._next_panel_key = key
-            self._next_panel_forced = False
-        return self._next_panel
+            self._next_scene = self._prepare_scene(settings, next_at)
+            self._next_scene_key = key
+            self._next_scene_forced = False
+        return self._next_scene
 
-    def _has_forced_panel(self, settings: Settings) -> bool:
-        with self._next_panel_lock:
-            if self._next_panel_key != self._panel_key(settings):
-                self._next_panel = None
-                self._next_panel_key = None
-                self._next_panel_forced = False
-            return self._next_panel_forced
+    def _has_forced_scene(self, settings: Settings) -> bool:
+        with self._next_scene_lock:
+            if self._next_scene_key != self._scene_key(settings):
+                self._next_scene = None
+                self._next_scene_key = None
+                self._next_scene_forced = False
+            return self._next_scene_forced
 
-    def _consume_forced_panel(
+    def _consume_forced_scene(
         self,
         settings: Settings,
         now: datetime,
-    ) -> PreparedPanel | None:
-        with self._next_panel_lock:
-            if self._next_panel_key != self._panel_key(settings):
-                self._next_panel = None
-                self._next_panel_key = None
-                self._next_panel_forced = False
+    ) -> Scene | None:
+        with self._next_scene_lock:
+            if self._next_scene_key != self._scene_key(settings):
+                self._next_scene = None
+                self._next_scene_key = None
+                self._next_scene_forced = False
                 return None
-            if not self._next_panel_forced or self._next_panel is None:
+            if not self._next_scene_forced or self._next_scene is None:
                 return None
-            panel = self._next_panel
-            for prepared in panel.slots:
-                if prepared.module == ItemsModule.name and type(prepared.content_id) is int:
-                    self.device_items_module.remember(prepared.content_id)
+            scene = self._next_scene
+            for fragment in scene.fragments:
+                if (
+                    fragment.module == ItemsModule.name
+                    and type(fragment.content_id) is int
+                ):
+                    self.device_items_module.remember(fragment.content_id)
             if settings.mode == "random":
                 next_at = self._next_check_at(settings, now)
-                self._next_panel = self._prepare_panel(settings, next_at)
-                self._next_panel_key = self._panel_key(settings)
+                self._next_scene = self._prepare_scene(settings, next_at)
+                self._next_scene_key = self._scene_key(settings)
             else:
-                self._next_panel = None
-                self._next_panel_key = None
-            self._next_panel_forced = False
-            return panel
+                self._next_scene = None
+                self._next_scene_key = None
+            self._next_scene_forced = False
+            return scene
 
-    def _prepare_panel(self, settings: Settings, at: datetime) -> PreparedPanel:
-        slots: list[PreparedSlot] = []
-        for assignment in settings.panel.slots:
+    def _prepare_scene(self, settings: Settings, at: datetime) -> Scene:
+        fragments: list[SceneFragment] = []
+        for index, assignment in enumerate(settings.panel.slots):
             module = self.device_modules.get(assignment.module)
             if module is None:
                 raise ConfigError(f"unknown module: {assignment.module}")
             content_id = module.prepare(settings, at, assignment)
-            slots.append(PreparedSlot(assignment.slot_id, assignment.module, content_id))
-        return PreparedPanel(settings.panel.template, tuple(slots), at)
+            fragments.append(
+                SceneFragment(
+                    f"fragment-{index}",
+                    assignment.module,
+                    content_id,
+                    assignment.module,
+                )
+            )
+        return Scene.create(tuple(fragments), at)
 
     @staticmethod
     def _items_assignment(settings: Settings):
@@ -400,8 +471,11 @@ class DisplayService:
         raise ConfigError("selected panel has no items module")
 
     @staticmethod
-    def _panel_key(settings: Settings) -> tuple[object, ...]:
+    def _scene_key(settings: Settings) -> tuple[object, ...]:
         return (
+            settings.device_id,
+            settings.channel_id,
+            settings.profile_id,
             settings.panel,
             settings.mode,
             settings.random_items,

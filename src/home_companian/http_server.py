@@ -7,17 +7,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, time
-from urllib.parse import parse_qs, urlencode, urlparse
+from threading import Lock
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
-from .config import ConfigError, FontChoice
+from .config import ConfigError, FontChoice, load_config
 from .service import DisplayService
 
 
+DISPLAY_BIN_DEVICE_ID = "wall_panel"
+
+
 def index_html(
-    fonts: tuple[FontChoice, ...] = (),
-    selected_font: Path | None = None,
-    latin_fonts: tuple[FontChoice, ...] = (),
-    selected_latin_font: Path | None = None,
+    fonts: tuple[FontChoice, ...],
+    selected_font: Path,
+    latin_fonts: tuple[FontChoice, ...],
+    selected_latin_font: Path,
+    devices: tuple[tuple[str, str], ...],
+    default_device: str,
 ) -> bytes:
     current_time = datetime.now().strftime("%H:%M")
     def font_options(choices: tuple[FontChoice, ...], selected: Path | None) -> str:
@@ -30,6 +36,34 @@ def index_html(
 
     chinese_options = font_options(fonts, selected_font)
     latin_options = font_options(latin_fonts, selected_latin_font)
+    def device_label(device_id: str, profile_id: str) -> str:
+        if profile_id.startswith("crowpanel"):
+            return "CrowPanel"
+        if profile_id.startswith("kindle"):
+            return "Kindle"
+        return device_id
+
+    configured_devices = devices
+    selected_device = default_device
+    selected_profile = next(
+        profile_id
+        for device_id, profile_id in configured_devices
+        if device_id == selected_device
+    )
+    default_label = device_label(selected_device, selected_profile)
+    secondary_sections = "".join(
+        f"""<hr class="device-divider">
+<section class="device-section">
+  <h2>{escape(device_label(device_id, profile_id))}</h2>
+  <img class="device-preview portrait-preview"
+       src="/v1/devices/{quote(device_id, safe='')}/preview.png"
+       onerror="this.hidden=true;this.nextElementSibling.hidden=false"
+       alt="{escape(device_label(device_id, profile_id))} current display">
+  <p hidden>设备尚未确认显示画面</p>
+</section>"""
+        for device_id, profile_id in configured_devices
+        if device_id != selected_device
+    )
     controls = f"""<div class="controls-grid">
 <div>随机预览 <button type="button" id="random-refresh">换一个</button>
 <button type="button" id="global-change" disabled>更改</button> <span id="change-status"></span></div>
@@ -107,10 +141,14 @@ window.addEventListener('DOMContentLoaded', loadNextRefresh);
 .controls-grid > div {{ min-width:0; }}
 .next-refresh {{ display:grid; gap:.5rem; }}
 .next-refresh img {{ width:160px; height:auto; border:1px solid #aaa; }}
+.device-divider {{ margin:2.5rem 0; border:0; border-top:1px solid #999; }}
+.device-preview {{ display:block; width:100%; height:auto; border:1px solid #888; }}
+.portrait-preview {{ max-width:758px; }}
 @media (max-width: 760px) {{ .display-layout {{ grid-template-columns:minmax(0,1fr); }} }}
 </style></head>
 <body style="font-family:sans-serif;margin:2rem;background:#eee">
   <h1>Home Companian</h1>
+  <h2>{escape(default_label)}</h2>
   <div class="display-layout">
     <div>
       <img class="main-preview" id="preview" src="/preview.png" width="792" height="272" alt="e-paper preview">
@@ -121,6 +159,7 @@ window.addEventListener('DOMContentLoaded', loadNextRefresh);
       <img id="next-preview" alt="next e-paper preview">
     </aside>
   </div>
+  {secondary_sections}
 </body>
 </html>
 """.encode("utf-8")
@@ -160,13 +199,77 @@ def parse_font_name(query: str) -> str | None:
     return values[0].strip()
 
 
-def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
+def parse_device_route(path: str, action: str) -> str | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 4 and parts[:2] == ["v1", "devices"] and parts[3] == action:
+        return parts[2] or None
+    return None
+
+
+class DeviceServices:
+    def __init__(self, config_path: Path, default_service: DisplayService) -> None:
+        self.config_path = config_path
+        self._lock = Lock()
+        default_device = default_service.settings().device_id
+        self._services = {default_device: default_service}
+
+    def get(self, device_id: str) -> DisplayService:
+        configured = load_config(self.config_path)
+        if device_id not in {device.id for device in configured.devices}:
+            raise KeyError(device_id)
+        with self._lock:
+            service = self._services.get(device_id)
+            if service is None:
+                service = DisplayService(self.config_path, device_id=device_id)
+                self._services[device_id] = service
+            return service
+
+
+def make_handler(
+    service: DisplayService,
+    device_services: DeviceServices | None = None,
+) -> type[BaseHTTPRequestHandler]:
+    device_services = device_services or DeviceServices(service.config_path, service)
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             request = urlparse(self.path)
             try:
-                if request.path == "/":
-                    settings = service.settings()
+                preview_device_id = parse_device_route(request.path, "preview.png")
+                device_id = parse_device_route(request.path, "next")
+                if preview_device_id is not None:
+                    device_service = device_services.get(preview_device_id)
+                    rendered = device_service.render_current()
+                    if rendered is None:
+                        self._send(
+                            HTTPStatus.NOT_FOUND,
+                            "text/plain; charset=utf-8",
+                            "设备尚未确认显示画面\n".encode(),
+                        )
+                        return
+                    output = BytesIO()
+                    rendered.image.save(output, format="PNG")
+                    self._send(HTTPStatus.OK, "image/png", output.getvalue())
+                elif device_id is not None:
+                    device_service = device_services.get(device_id)
+                    rendered = device_service.deliver()
+                    self._send(
+                        HTTPStatus.OK,
+                        rendered.frame.mime_type,
+                        rendered.frame.payload,
+                        {
+                            "ETag": f'"{rendered.frame.id}"',
+                            "X-Frame-Id": rendered.frame.id,
+                            "X-Scene-Id": rendered.frame.scene_id,
+                            "X-Profile-Id": rendered.frame.profile_id,
+                            "X-Next-Check-Seconds": str(
+                                device_service.next_check_seconds()
+                            ),
+                        },
+                    )
+                elif request.path == "/":
+                    config = service.config()
+                    settings = config.for_device(config.default_device)
                     self._send(
                         HTTPStatus.OK,
                         "text/html; charset=utf-8",
@@ -175,6 +278,11 @@ def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
                             settings.font,
                             settings.latin_fonts,
                             settings.latin_font,
+                            tuple(
+                                (device.id, device.profile)
+                                for device in config.devices
+                            ),
+                            config.default_device,
                         ),
                     )
                 elif request.path == "/preview.png":
@@ -232,15 +340,22 @@ def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
                     rendered.image.save(output, format="PNG")
                     self._send(HTTPStatus.OK, "image/png", output.getvalue())
                 elif request.path == "/display.bin":
-                    rendered = service.render(device=True)
+                    crowpanel_service = device_services.get(DISPLAY_BIN_DEVICE_ID)
+                    rendered = crowpanel_service.render(device=True)
                     self._send(
                         HTTPStatus.OK,
                         "application/octet-stream",
-                        rendered.framebuffer,
-                        {"X-Next-Check-Seconds": str(service.next_check_seconds())},
+                        rendered.frame.payload,
+                        {
+                            "X-Next-Check-Seconds": str(
+                                crowpanel_service.next_check_seconds()
+                            )
+                        },
                     )
                 else:
                     self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"not found\n")
+            except KeyError:
+                self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"unknown device\n")
             except ConfigError as exc:
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", f"{exc}\n".encode())
             except ValueError as exc:
@@ -249,7 +364,18 @@ def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             request = urlparse(self.path)
             try:
-                if request.path == "/change":
+                device_id = parse_device_route(request.path, "ack")
+                if device_id is not None:
+                    body = self._read_json()
+                    frame_id = body.get("frame_id")
+                    status = body.get("status")
+                    if not isinstance(frame_id, str) or not frame_id:
+                        raise ValueError("frame_id must be provided")
+                    if not isinstance(status, str):
+                        raise ValueError("ack status must be provided")
+                    device_services.get(device_id).acknowledge(frame_id, status)
+                    self._send_json(HTTPStatus.OK, {"frame_id": frame_id, "status": status})
+                elif request.path == "/change":
                     item_id = parse_item_id(request.query)
                     if item_id is None:
                         raise ValueError("item must be provided")
@@ -272,10 +398,27 @@ def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
                     )
                 else:
                     self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"not found\n")
+            except KeyError:
+                self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"unknown device\n")
             except ConfigError as exc:
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", f"{exc}\n".encode())
             except ValueError as exc:
                 self._send(HTTPStatus.BAD_REQUEST, "text/plain; charset=utf-8", f"{exc}\n".encode())
+
+        def _read_json(self) -> dict[str, object]:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if length <= 0 or length > 64 * 1024:
+                raise ValueError("JSON body must be provided")
+            try:
+                value = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValueError("invalid JSON body") from exc
+            if not isinstance(value, dict):
+                raise ValueError("JSON body must be an object")
+            return value
 
         def _send_json(self, status: HTTPStatus, value: object) -> None:
             self._send(
@@ -304,4 +447,9 @@ def make_handler(service: DisplayService) -> type[BaseHTTPRequestHandler]:
 
 
 def create_server(host: str, port: int, config_path: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(DisplayService(config_path)))
+    default_service = DisplayService(config_path)
+    device_services = DeviceServices(config_path, default_service)
+    return ThreadingHTTPServer(
+        (host, port),
+        make_handler(default_service, device_services),
+    )

@@ -27,15 +27,27 @@ class DisplayServiceTests(unittest.TestCase):
         self.config_path.write_text(
             f"font: {FONT}\n"
             "library_dir: .\n"
-            "panel:\n"
-            "  template: landscape_1\n"
-            "  slots:\n"
-            "    1: {module: items}\n"
-            "mode: scheduled\n"
-            "schedule:\n"
-            "  - {time: '12:00', item: 1}\n"
-            "  - {time: '13:00', item: 2}\n"
-            "random_items: [1, 2, 3]\n",
+            "default_device: wall\n"
+            "channels:\n"
+            "  home:\n"
+            "    mode: scheduled\n"
+            "    schedule:\n"
+            "      - {time: '12:00', item: 1}\n"
+            "      - {time: '13:00', item: 2}\n"
+            "    random_items: [1, 2, 3]\n"
+            "devices:\n"
+            "  wall:\n"
+            "    profile: crowpanel_579\n"
+            "    channel: home\n"
+            "    refresh:\n"
+            "      minutes: 60\n"
+            "      active_start: '07:00'\n"
+            "      active_end: '22:00'\n"
+            "    presentation:\n"
+            "      panel:\n"
+            "        template: landscape_1\n"
+            "        slots:\n"
+            "          1: {module: items}\n",
             encoding="utf-8",
         )
         self.current_display_path = root / "current.png"
@@ -70,6 +82,19 @@ class DisplayServiceTests(unittest.TestCase):
     def test_change_targets_next_refresh_interval(self) -> None:
         next_at = self.service.change(3, now=datetime(2026, 7, 15, 14, 0))
         self.assertEqual(next_at, datetime(2026, 7, 15, 15, 0))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_delivery_repeats_frame_until_display_ack(self) -> None:
+        first = self.service.deliver(now=datetime(2026, 7, 15, 12, 30))
+        repeated = self.service.deliver(now=datetime(2026, 7, 15, 12, 31))
+
+        self.assertEqual(first.frame.id, repeated.frame.id)
+        self.assertIsNone(self.service.render_current())
+        self.service.acknowledge(first.frame.id, "displayed")
+        current = self.service.render_current()
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(current.frame.id, first.frame.id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_random_change_is_consumed_once_then_prepares_following_panel(self) -> None:
@@ -107,8 +132,8 @@ class DisplayServiceTests(unittest.TestCase):
     def test_next_check_aligns_to_half_hour_during_day(self) -> None:
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
-                "mode: scheduled\n",
-                "mode: scheduled\nrefresh_minutes: 30\nactive_start: '07:00'\nactive_end: '22:00'\n",
+                "      minutes: 60\n",
+                "      minutes: 30\n",
             ),
             encoding="utf-8",
         )
@@ -175,7 +200,7 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertIsNotNone(current)
         assert current is not None
         self.assertEqual(current.item_id, device.item_id)
-        self.assertEqual(current.framebuffer, device.framebuffer)
+        self.assertEqual(current.frame.payload, device.frame.payload)
         self.assertEqual(current.image.tobytes(), device.image.tobytes())
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
@@ -187,7 +212,7 @@ class DisplayServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(current)
         assert current is not None
-        self.assertEqual(current.framebuffer, device.framebuffer)
+        self.assertEqual(current.frame.payload, device.frame.payload)
         self.assertEqual(current.image.tobytes(), device.image.tobytes())
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
@@ -200,8 +225,8 @@ class DisplayServiceTests(unittest.TestCase):
             prepared = self.service.render_next()
             self.config_path.write_text(
                 content.replace(
-                    "  slots:\n    1: {module: items}\n",
-                    "  slots: {}\n",
+                    "        slots:\n          1: {module: items}\n",
+                    "        slots: {}\n",
                 ),
                 encoding="utf-8",
             )
@@ -223,8 +248,9 @@ class DisplayServiceTests(unittest.TestCase):
         content = self.config_path.read_text(encoding="utf-8")
         self.config_path.write_text(
             content.replace("template: landscape_1", "template: landscape_2").replace(
-                "    1: {module: items}\n",
-                "    1: {module: items}\n    2: {module: chinese, source: select}\n",
+                "          1: {module: items}\n",
+                "          1: {module: items}\n"
+                "          2: {module: chinese, source: select}\n",
             ),
             encoding="utf-8",
         )

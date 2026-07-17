@@ -34,6 +34,14 @@ class TemplateTests(unittest.TestCase):
             (592, 14, 200, 200),
         )
 
+    def test_loads_kindle_portrait_template(self) -> None:
+        template = load_template("portrait_1")
+        self.assertEqual((template.width, template.height), (758, 976))
+        self.assertEqual(
+            (template.slot(1).width, template.slot(1).height),
+            (758, 976),
+        )
+
     def test_rejects_assignment_to_unknown_slot(self) -> None:
         panel = PanelConfig("landscape_1", (SlotAssignment(2, "items"),))
         with self.assertRaisesRegex(ConfigError, "has no slot 2"):

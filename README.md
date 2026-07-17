@@ -1,6 +1,8 @@
-# 家宠
+# 家宠 Home Companian
 
-用于支持嵌入式系统的家庭电子小管家宠物，主要目的是给单片机提供post/get的服务，但是也有相对应的网页版本。网页版本会模拟在电子屏幕上的显示效果。
+家庭服务器上的多设备显示项目。内容、调度、排版和编码都在服务端完成；Kindle、CrowPanel 等显示设备保持为只负责下载画面、显示、上报事件和休眠的薄客户端。
+
+当前 CrowPanel ESP32 链路已可用；Kindle 是下一个设备目标。网页目前是预览和管理界面，不是独立显示设备。
 
 ## 效果示例
 
@@ -15,6 +17,30 @@
 ## 工作流程
 
 ![Home Companian 从服务端到客户端的工作流程](overview.png)
+
+## 架构
+
+这个 repo 和整个产品叫 Home Companian。`Forge` 只是其中的服务端组合与渲染引擎：它把各内容模块产生的语义内容组合起来，再按目标设备生成最终 Frame。Forge 不负责 HTTP、业务调度、设备休眠或事件的应用逻辑。
+
+```text
+内容模块 → Scene fragments → Home Companian 调度 → Scene
+                                                        ↓
+                                                      Forge
+                                                        ↓
+                                               设备专用 Frame
+                                                        ↓
+                                                     Protocol
+                                                        ↓
+                                            Kindle / CrowPanel / 未来设备
+```
+
+一个设备由三层定义：
+
+- Device Instance：具体设备，保存设备 ID、订阅频道和刷新策略。
+- Device Profile：型号能力，描述分辨率、方向、灰度、safe area、输出格式和输入能力。
+- Display Backend / Encoder：将 Forge 的渲染结果编码为 `kindle_png`、`crowpanel_1bit` 等实际格式。
+
+新 Kindle 型号通常只需增加 profile；新硬件系列才可能需要新 backend。内容模块和应用逻辑不应因此修改。详细设计见 [DESIGN.md](DESIGN.md)，HTTP 契约见 [PROTOCOL.md](PROTOCOL.md)。
 
 ## 目标人群
 
@@ -48,8 +74,20 @@
 
 ## 硬件
 
- - e-ink
- - 屏幕大小为5.79 inch,792x272 resolution（横屏），但是后续可支持更多规格。
+| 设备 | 状态 | 输出 |
+| --- | --- | --- |
+| CrowPanel 5.79 inch, 792x272 | 已支持 | 27,200-byte 1-bit framebuffer |
+| Kindle 6 inch, 758x1024, 212 PPI | 服务端 profile/PNG 已支持，客户端待接入 | 16-level grayscale PNG |
+| Browser | 当前为预览/管理端 | PNG |
+
+CrowPanel 的 8px 接缝、180 度旋转和 1-bit 显存映射是 `crowpanel_579` encoder 的私有约束，不是全局画布规则。
+
+当前内置 profile：
+
+- `crowpanel_579`：792×272 横屏、1-bit framebuffer。
+- `kindle_6_212ppi`：758×1024 竖屏、212 PPI、16 级灰度 PNG。
+
+这台设备的 instance ID 是 `kindleGen7dk`，使用 `GET /v1/devices/kindleGen7dk/next` 获取画面，显示成功后向 `POST /v1/devices/kindleGen7dk/ack` 提交 `frame_id`。服务端与协议已完成；Kindle 端如何自动下载并设置画面仍需按实际运行入口实现。
 
 ## 模块
 
@@ -67,22 +105,50 @@
 ## 可定制
 
 ### 配置文件
- - `~/.config/home_companian/config.yaml` 存储程序设置和 `library_dir`。
+ - `~/.config/home_companian/config.yaml` 存储全局素材设置、Channel 和 Device。
  - `<library_dir>/items.csv` 使用 `id,type,text` 三列存储文字项目。
  - `<library_dir>/health/exercises.csv` 使用 `id,name,dose,instruction` 四列存储动作。
  - `<library_dir>/math/problems.csv` 使用 `id,type,question,answer` 四列存储题目；答案暂不显示。
  - `<library_dir>/photos/` 和 `<library_dir>/images/` 只存储已处理的成品图片。
 
+配置不兼容旧的顶层 `mode/panel/status_bar/refresh_*` 格式。Channel 决定内容选择，Device 决定 profile、刷新和 presentation：
+
+```yaml
+default_device: wall_panel
+channels:
+  home:
+    mode: random
+    schedule:
+      - {time: "12:00", item: 1}
+    random_items: [1, 2, 3]
+devices:
+  wall_panel:
+    profile: crowpanel_579
+    channel: home
+    refresh:
+      minutes: 30
+      active_start: "07:00"
+      active_end: "22:00"
+    presentation:
+      status_bar: {}
+      panel:
+        template: landscape_1
+        slots:
+          1: {module: items}
+```
+
 ### 排版
 
-排版拆成模板、模块和编排三部分：
+当前 CrowPanel 实现把排版拆成模板、模块和编排三部分：
 
  - 程序提供若干固定模板。模板决定 topology，每个区域使用模板内部的数字编号。
  - 用户不能修改模板的坐标和尺寸，但可以在 `config.yaml` 中选择模板。
  - 模块负责提供内容并在模板给定的矩形区域内渲染，不拥有绝对坐标。
  - 用户编排记录当前模板中每个数字区域放哪个模块；空区域允许保持白色。
- - 顶部 44px 是固定状态栏，不参与模板；792x272 屏幕的模板只管理下方 792x228 内容区。
+ - `crowpanel_579` presentation 的顶部 44px 是固定状态栏，不参与模板；模板只管理下方 792x228 内容区。
  - 状态栏模块与内容模块是两套独立系统。状态栏按 `left`、`center`、`right` 三组横向排列，不能放入模板区域。
+
+下面的 `status_bar` 和 `panel` 示例均是 `devices.<device_id>.presentation` 下的片段。
 
 ```yaml
 status_bar:
@@ -152,7 +218,7 @@ panel:
 
 `answer` 为以后互动预留，第一版不会通过画面或设备响应显示答案。
 
-后续多区域配置将沿用同一结构：
+现有多区域配置沿用同一结构：
 
 ```yaml
 panel:
@@ -168,7 +234,9 @@ panel:
       mode: random
 ```
 
-未来增加“屏幕编辑器”：用户可以在网页中浏览内置模板和可用模块，选择模板，并通过点击或拖拽把模块放入数字区域。编辑器写回的仍是上述配置，不引入另一套布局模型。当前只通过 YAML 配置，不实现编辑器。
+目标架构中，模块先产生不带绝对坐标的 Scene fragment，Forge 再使用按 Device Profile 选择的 presentation 完成排版。现有 `panel` 配置在迁移期作为 CrowPanel presentation 配置保留。
+
+未来增加“屏幕编辑器”：用户可以在网页中浏览内置模板和可用模块，为不同 Device Profile 选择 presentation 并配置模块映射。当前只通过 YAML 配置，不实现编辑器。
 
 ## 运行
 
@@ -194,14 +262,19 @@ python3 server.py --host 0.0.0.0 --port 8080
 
 启动后访问 `http://localhost:<port>/` 查看网页预览。
 
-默认网页预览显示服务端最后一次通过 `/display.bin` 发给设备的完整画面；手动随机/定时预览和“更改”不会覆盖它。“更改”只替换下一屏。当前设备画面保存在 `~/.local/state/home_companian/current.png`，服务重启后仍可恢复；设备从未请求过画面时不会拿下一屏冒充当前画面。
+主页按设备纵向排列：默认 CrowPanel 在上方，分隔线下显示 Kindle 当前已确认画面。设备预览不使用下一帧冒充当前画面；尚未 ACK 的设备会显示无当前画面。
 
-设备刷新周期由配置控制：
+默认网页预览显示服务端最后一次通过 `/display.bin` 发给设备的完整画面；手动随机/定时预览和“更改”不会覆盖它。“更改”只替换下一屏。`wall_panel` 当前画面继续保存在 `~/.local/state/home_companian/current.png`；其他设备使用 `current-<device_id>.png`。服务重启后仍可恢复；设备从未请求过画面时不会拿下一屏冒充当前画面。
+
+每台设备的刷新周期独立配置：
 
 ```yaml
-refresh_minutes: 30
-active_start: "07:00"
-active_end: "22:00"
+devices:
+  wall_panel:
+    refresh:
+      minutes: 30
+      active_start: "07:00"
+      active_end: "22:00"
 ```
 
 设备在活跃时段每 30 分钟检查一次，夜间深睡；服务端通过响应头告知设备下次唤醒时间。

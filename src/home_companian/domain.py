@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-
-
 @dataclass(frozen=True)
 class Rect:
     x: int
@@ -56,17 +53,3 @@ class StatusBarConfig:
     left: tuple[StatusAssignment, ...] = ()
     center: tuple[StatusAssignment, ...] = ()
     right: tuple[StatusAssignment, ...] = ()
-
-
-@dataclass(frozen=True)
-class PreparedSlot:
-    slot_id: int
-    module: str
-    content_id: int | str
-
-
-@dataclass(frozen=True)
-class PreparedPanel:
-    template: str
-    slots: tuple[PreparedSlot, ...]
-    next_at: datetime | None = None

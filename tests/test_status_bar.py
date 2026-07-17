@@ -24,6 +24,9 @@ FONT = Path("/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf"
 
 def settings(status_bar: StatusBarConfig) -> Settings:
     return Settings(
+        device_id="wall",
+        profile_id="crowpanel_579",
+        channel_id="home",
         mode="random",
         font=FONT,
         fonts=(FontChoice("font", FONT),),
@@ -65,7 +68,8 @@ class StatusBarTests(unittest.TestCase):
             right=(StatusAssignment("weekday"),),
         )
         image = render_status_bar(
-            settings(configured), datetime(2026, 7, 16, 12, 30), MODULES
+            settings(configured), datetime(2026, 7, 16, 12, 30), MODULES,
+            width=792, height=44,
         )
 
         self.assertEqual(image.size, (792, 44))
@@ -95,7 +99,8 @@ class StatusBarTests(unittest.TestCase):
     def test_date_module_can_remain_unconfigured(self) -> None:
         configured = StatusBarConfig(right=(StatusAssignment("time"),))
         image = render_status_bar(
-            settings(configured), datetime(2026, 7, 16, 12, 30), MODULES
+            settings(configured), datetime(2026, 7, 16, 12, 30), MODULES,
+            width=792, height=44,
         )
         self.assertEqual(image.crop((300, 0, 492, 44)).getextrema(), (255, 255))
 

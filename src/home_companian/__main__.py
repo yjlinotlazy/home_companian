@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .config import DEFAULT_CONFIG_PATH, ConfigError, load_settings
+from .config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from .http_server import create_server
 
 
@@ -15,7 +15,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        load_settings(args.config)
+        load_config(args.config)
     except ConfigError as exc:
         parser.error(str(exc))
 

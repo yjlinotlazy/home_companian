@@ -6,8 +6,8 @@ from PIL import Image
 
 from ..config import Item, Settings
 from ..domain import Rect, SlotAssignment
-from ..rendering import render_scene
 from ..selection import RandomSelector, select_scheduled
+from ..typography import render_centered_text
 
 
 class ItemsModule:
@@ -49,10 +49,9 @@ class ItemsModule:
         if type(content_id) is not int:
             raise ValueError(f"invalid items content id: {content_id}")
         item = self.resolve(settings, content_id)
-        return render_scene(
-            item,
+        return render_centered_text(
+            item.text,
             settings.font,
             settings.latin_font,
-            now=now,
-            size=(rect.width, rect.height),
+            (rect.width, rect.height),
         )

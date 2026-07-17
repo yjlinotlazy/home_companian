@@ -1,21 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 import unicodedata
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import Item
 
-
-VISIBLE_WIDTH = 792
-MEMORY_WIDTH = 800
-HEIGHT = 272
-STATUS_BAR_HEIGHT = 44
-CONTENT_HEIGHT = HEIGHT - STATUS_BAR_HEIGHT
-SEAM_X = 396
-FRAMEBUFFER_SIZE = MEMORY_WIDTH * HEIGHT // 8
 THRESHOLD = 180
 
 
@@ -75,49 +65,24 @@ def _content_fonts(
     return _font(chinese_path, 28), _font(latin_path, 28)
 
 
-def render_scene(
-    item: Item,
-    font_path: Path,
-    latin_font_path: Path | None = None,
-    now: datetime | None = None,
-    size: tuple[int, int] = (VISIBLE_WIDTH, CONTENT_HEIGHT),
+def render_centered_text(
+    text: str,
+    chinese_path: Path,
+    latin_path: Path,
+    size: tuple[int, int],
 ) -> Image.Image:
-    del now
-    latin_font_path = latin_font_path or font_path
-    width, height = size
     image = Image.new("L", size, 255)
     draw = ImageDraw.Draw(image)
-
     chinese_font, latin_font = _content_fonts(
-        draw, item.text, font_path, latin_font_path, width
+        draw, text, chinese_path, latin_path, size[0]
     )
-
-    text_width, top, bottom = _mixed_metrics(draw, item.text, chinese_font, latin_font)
+    text_width, top, bottom = _mixed_metrics(
+        draw, text, chinese_font, latin_font
+    )
     x = (size[0] - text_width) / 2
-    baseline = (height - (bottom - top)) / 2 - top
-    for run, chinese in _text_runs(item.text):
+    baseline = (size[1] - (bottom - top)) / 2 - top
+    for run, chinese in _text_runs(text):
         font = chinese_font if chinese else latin_font
         draw.text((x, baseline), run, font=font, fill=0, anchor="ls")
         x += draw.textlength(run, font=font)
-
     return image.point(lambda pixel: 255 if pixel > THRESHOLD else 0, mode="1")
-
-
-def image_to_framebuffer(image: Image.Image) -> bytes:
-    if image.size != (VISIBLE_WIDTH, HEIGHT):
-        raise ValueError(f"image must be {VISIBLE_WIDTH}x{HEIGHT}, got {image.width}x{image.height}")
-
-    monochrome = image.convert("L").point(lambda pixel: 255 if pixel > THRESHOLD else 0)
-    framebuffer = bytearray([0xFF] * FRAMEBUFFER_SIZE)
-
-    for visible_y in range(HEIGHT):
-        for visible_x in range(VISIBLE_WIDTH):
-            if monochrome.getpixel((visible_x, visible_y)) != 0:
-                continue
-            memory_x = visible_x + (8 if visible_x >= SEAM_X else 0)
-            memory_x = MEMORY_WIDTH - memory_x - 1
-            memory_y = HEIGHT - visible_y - 1
-            offset = memory_y * (MEMORY_WIDTH // 8) + memory_x // 8
-            framebuffer[offset] &= ~(0x80 >> (memory_x % 8))
-
-    return bytes(framebuffer)

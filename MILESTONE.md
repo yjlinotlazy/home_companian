@@ -1,4 +1,6 @@
-# 家宠里程碑
+# Home Companian 里程碑
+
+M1–M9 记录 CrowPanel baseline。当前代码已迁移到 Application → Scene → Forge → Frame → Protocol → Device 分层；仅保留 `/display.bin` 作为旧固件兼容口。
 
 ## M1：服务端静态画面
 
@@ -111,6 +113,69 @@
 
 验收：不修改代码即可编辑动作和题库，并能把 `health` 或 `math` 放入任一模板区域。
 
+## M10：多设备领域模型
+
+- [x] 定义不可变 `SceneFragment`、`Scene` 和 `Frame`。
+- [ ] 定义 Channel，并把逻辑当前/下一 Scene 与具体设备 Frame 分开。
+- [x] 定义 Device Instance、Device Profile、capabilities 和刷新策略。
+- [x] 建立 profile/backend 注册表；内置 `crowpanel_579`。
+- [x] 将配置直接迁移为 Channel/Device/Presentation；不兼容旧格式。
+- [ ] 验证两台设备订阅同一 Channel 时共享 Scene、但不共享投递状态。
+
+验收：代码可以表达“同一个 home Scene，分别面向 CrowPanel 和 Kindle 生成 Frame”，且不把设备尺寸写入 Scene。
+
+## M11：Forge 组合与渲染引擎
+
+- [x] 建立 `home_companian/forge/`，只包含 composition、layout、rendering、presentation 和 encoder。
+- [ ] 将内容模块的选择结果改为语义 Scene fragment，不直接生成最终设备画面。
+- [x] 将模板和状态栏迁入按 Device Profile 选择的 presentation。
+- [x] 将 CrowPanel 的 8px 接缝、旋转和 1-bit 映射迁入 `crowpanel_1bit` encoder。
+- [ ] 同一 Scene 支持生成预览 PNG 和 CrowPanel raw Frame。
+- [ ] 保持现有模块、模板和网页画面视觉结果不回退。
+
+验收：Forge 不依赖 HTTP、随机/定时选择或设备状态；现有 CrowPanel 仍可显示相同内容。
+
+## M12：通用多设备协议
+
+- [x] 实现 `GET /v1/devices/{device_id}/next`。
+- [x] 实现不可变 Frame ID、Scene ID、profile ID 和 MIME type 响应元数据。
+- [x] 实现 `POST /v1/devices/{device_id}/ack`，区分已发送与设备确认显示。
+- [ ] 为每台设备保存独立的 current Frame、目标 Frame、下次检查时间和错误状态。
+- [ ] 网页按 Device Instance 显示当前画面、下一帧和 ACK 状态。
+- [x] 保留 `GET /display.bin` 作为 CrowPanel 固件接口。
+- [ ] 添加重复 GET、重复 ACK、离线恢复和失败重试测试。
+
+验收：不同 profile 的设备不会消费或覆盖彼此的 Frame，兼容 CrowPanel 固件无需立即重刷。
+
+## M13：Kindle PNG 客户端
+
+- [ ] 验证 Kindle 的实际运行入口：浏览器、越狱扩展或其他本地客户端。
+- [x] 定义 `kindle_6_212ppi` Device Profile 和 `portrait_1` presentation。
+- [x] 实现 16 级灰度 PNG backend。
+- [ ] Kindle 能请求 PNG、显示、提交 ACK，并按建议时间再次检查。
+- [ ] 新 Kindle 型号只需新增 profile；共享 backend 的型号不复制客户端业务逻辑。
+
+验收：Kindle 与 CrowPanel 订阅同一 Channel，显示同一逻辑 Scene 的不同尺寸/格式 Frame。
+
+## M14：通用事件
+
+- [ ] 实现 `POST /v1/devices/{device_id}/events`。
+- [ ] 定义 `wake`、`sleep`、`tap`、`swipe` 和 `button` 事件 envelope。
+- [ ] 使用 `event_id` 去重，并关联产生事件时显示的 `frame_id`。
+- [ ] 将设备坐标转换为规范化 Scene/presentation 事件后再交给 Application。
+- [ ] Application 不按 Kindle/CrowPanel 型号分支业务逻辑。
+
+验收：两个具有不同输入能力的设备可通过同一协议触发相同应用动作。
+
+## M15：后续传输与刷新优化
+
+- [ ] 根据设备能力支持灰度、raw bitmap 和未来 delta/dirty rectangle 编码。
+- [ ] 支持按 Device Instance 调整活跃窗口、低电策略和刷新频率。
+- [ ] 评估 Frame 内存缓存，保持内容库不产生运行时素材缓存目录。
+- [ ] 评估 WebSocket、MQTT 或 push transport。
+
+验收：优化仅影响 profile、encoder、refresh policy 或 protocol adapter，不修改 Application 和 Scene。
+
 ## 后续迭代候选
 
 - [ ] 打卡确认及完成记录。
@@ -118,4 +183,4 @@
 - [ ] 家庭相册。
 - [ ] 可互动宠物和植物。
 - [ ] 数学题答案揭晓及互动。
-- [ ] 多设备及多种屏幕规格。
+- [ ] 设备自动注册和认证。
