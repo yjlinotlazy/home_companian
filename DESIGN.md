@@ -4,7 +4,7 @@
 
 家宠是运行在家庭服务器上的多设备显示项目。服务端持有内容、调度、排版和渲染逻辑；CrowPanel、Kindle 及未来设备是稳定、可复用的薄客户端。
 
-当前 baseline 已打通 CrowPanel 的定时拉取与电子墨水屏刷新，支持文字、图片、识字、健身和数学模块。下一阶段不改变现有功能，而是把它迁移到可支持 Kindle 和多型号设备的通用边界上。
+当前已打通 CrowPanel 的定时拉取与电子墨水屏刷新，支持文字、图片、识字、健身和数学模块；服务端也已具备 Kindle profile、PNG Frame 和通用 Frame/ACK 接口。下一阶段是接入 Kindle 客户端，并继续收紧 Application、Forge、Protocol 和 Device 的代码边界。
 
 ## 架构原则
 
@@ -99,7 +99,7 @@ src/home_companian/
 └── devices/        # instances、profiles、capabilities、投递状态
 ```
 
-具体目录会按迁移需要逐步建立，不为满足目录图而一次性搬动所有文件。设备端客户端可以因工具链不同继续放在独立项目中；本 repo 只要求服务端 Device Profile 和协议契约稳定。
+这是目标边界，不要求目录与分层一一对应。当前 `forge/` 和 `devices/` 已独立；Application 与 HTTP Protocol 仍有部分逻辑集中在 `service.py` 和 `http_server.py`，后续按实际复杂度再拆。设备端客户端可以因工具链不同继续放在独立项目中；本 repo 只要求服务端 Device Profile 和协议契约稳定。
 
 ## 当前 CrowPanel Profile
 
@@ -202,7 +202,7 @@ home_companian_library/
 
 ## 内容选择模式
 
-当前实现中，`scheduled` 和 `random` 是两种全局模式，通过配置切换且不混用。迁移到多设备模型后，选择模式属于 Channel/Application 配置；Device Instance 只决定何时获取该频道的最新 Scene。
+`scheduled` 和 `random` 是 Channel 的两种选择模式。Device Instance 只决定订阅哪个 Channel、何时检查和使用哪个 presentation；选择模式不属于设备型号。
 
 ### 定时模式
 
@@ -244,7 +244,7 @@ CrowPanel 当前在 07:00–22:00 之间每 30 分钟请求一次，服务端从
 
 - 模板由程序提供，定义 `crowpanel_579` presentation 的固定 topology。区域使用模板内部的数字编号，例如 `1`、`2`、`3`；编号不在不同模板之间表达相同语义。
 - CrowPanel 屏幕顶部固定预留 44px 状态栏。状态栏不属于内容模板；792x272 屏幕的模板内容区统一为 792x228。
-- 模块当前同时负责选择内容和在矩形区域内渲染。目标架构会把前者变成 Scene fragment，把后者迁入 Forge。
+- 模块的 `prepare` 阶段选择内容并生成 Scene fragment；当前模块仍负责在 Forge 给定的矩形内绘制自己的 tile，Forge 负责整体 composition、presentation 和最终编码。长期可以继续把通用文字排版和图像处理能力下沉到 Forge，但模块不得拥有设备绝对坐标或编码细节。
 - 编排保存在用户的 `config.yaml` 中，记录当前选择的内置模板以及 `slot → module` 分配。用户可以选择模板和模块分配，但不能在配置中修改模板坐标。
 
 模板/presentation 属于 Forge 和 Device Profile，不属于 `<library_dir>`。内容库只保存用户素材和各模块的数据源。
@@ -306,13 +306,13 @@ panel:
 
 ## 网页预览
 
-以下是当前单设备 baseline 行为：
+当前网页行为：
 
 - 网页同时提供随机预览和定时预览，不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
 - 手动预览只影响当前网页，不修改 YAML，也不改变 ESP32 的设备结果。刷新网页后恢复真实全局画面。
-- 服务端把最后一次 `/display.bin` 生成的完整画面保存在内存中，默认网页预览直接返回这张图，因此项目、图片、字体和状态栏都与发给设备的 framebuffer 一致。它表示“最后一次发出”，不代表设备已经确认刷新成功。
+- CrowPanel 把最后一次 `/display.bin` 生成的完整画面作为当前画面，因此项目、图片、字体和状态栏都与发给设备的 framebuffer 一致。兼容接口没有 ACK，所以它表示“最后一次发出”，不代表设备已经确认刷新成功。
 - 预览后可以点击“更改”，用当前候选项目替换内存中的下一屏。网页的下一屏缩略预览立即更新，设备下一次请求 `/display.bin` 时消费该画面。
 - 手动更改不按时钟提前过期；即使设备延迟唤醒，也保留到下一次设备请求。消费后恢复正常选择，服务重启或模板/编排变化也会清除该更改。
 - 网页随机预览和设备随机选择使用独立状态，预览不会提前消耗或改变设备的下一个随机结果。
@@ -320,7 +320,7 @@ panel:
 - 网页显示下一次刷新时间和缩略预览。随机模式的下一条内容预先保存在服务内存中：网页只查看，设备请求时消费并生成再下一条；服务重启后清空。
 - `wall_panel` 最后一次画面继续写入 `~/.local/state/home_companian/current.png`，其他设备按设备写入 `current-<device_id>.png`。服务重启后仍可恢复；下一屏状态仍只保存在内存中。设备从未请求过画面时，默认预览返回“尚无设备画面”，绝不拿下一屏冒充当前画面。
 
-多设备版本中，网页必须先选择 Device Instance。当前画面、下一帧预览、下次刷新时间和 ACK 状态都按设备显示；内容候选和手动“更改”按 Channel 显示。服务端不能用某台设备最后生成的 PNG 冒充另一台设备的当前画面。
+主页按配置列出设备。当前控制区仍服务 `default_device`，其他设备先显示各自已确认的当前画面；未来再加入设备选择器和逐设备控制。服务端不能用某台设备最后生成的 PNG 冒充另一台设备的当前画面。
 
 ## 页面内容
 
@@ -372,6 +372,24 @@ devices:
 
 内置 Device Profile 与用户的 Device Instance 分开保存。不同设备可以选择不同刷新窗口、状态栏、模板和模块；用户只选择 profile，不复制硬件参数。旧的顶层显示配置不再兼容。
 
+设备 ID 只存在于用户配置和由它派生的运行状态中，不等同于型号。多台同型号设备可以使用不同 ID 和同一个 profile。唯一例外是旧固件兼容口 `/display.bin` 固定查找 `wall_panel`；通用接口不要求这个名字。
+
+字体候选和当前选择也保存在配置中。网页分别从 `fonts` 和 `latin_fonts` 生成中文、非中文下拉菜单，选中后写回 `font` 或 `latin_font`：
+
+```yaml
+font: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
+fonts:
+  霞鹜文楷: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
+  思源黑体: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
+
+latin_font: /usr/share/fonts/TTF/CaskaydiaCoveNerdFont-Regular.ttf
+latin_fonts:
+  Caskaydia Cove Nerd Font: /usr/share/fonts/TTF/CaskaydiaCoveNerdFont-Regular.ttf
+  JetBrains Mono Nerd Font: /usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf
+  Noto Sans Mono: /usr/share/fonts/noto/NotoSansMono-Regular.ttf
+  霞鹜文楷: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
+```
+
 ## 当前阶段非目标
 
 以下内容不属于当前多设备重构阶段：
@@ -390,5 +408,5 @@ devices:
 ## 待确认
 
 - Wi-Fi 凭据和服务器地址目前通过 ESP-IDF 配置写入固件，后续再决定是否支持设备端配置。
-- Kindle 客户端采用浏览器页面、越狱扩展还是其他显示入口，需要在实现 Device Profile 前验证。
+- Kindle 客户端采用浏览器页面、越狱扩展还是其他显示入口，需要在实现设备端下载和显示客户端前验证。
 - 多设备认证和首次注册方式尚未确定；协议先保留稳定的 `device_id` 边界。
