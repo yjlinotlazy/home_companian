@@ -34,7 +34,22 @@ class ImagesModule:
         collections_option = assignment.option("collections")
         if collection is not None and collections_option is not None:
             raise ConfigError("images module must use collection or collections, not both")
-        if collections_option is not None:
+        wildcard = collections_option == "*"
+        if wildcard:
+            root = settings.library_dir / "images"
+            try:
+                collections = tuple(
+                    sorted(
+                        path.name
+                        for path in root.iterdir()
+                        if path.is_dir()
+                        and path.name != "raw"
+                        and COLLECTION_NAME.fullmatch(path.name) is not None
+                    )
+                )
+            except OSError as exc:
+                raise ConfigError(f"image library cannot be opened: {root}") from exc
+        elif collections_option is not None:
             collections = tuple(
                 dict.fromkeys(part.strip() for part in collections_option.split(","))
             )
@@ -46,7 +61,8 @@ class ImagesModule:
             COLLECTION_NAME.fullmatch(name) is None for name in collections
         ):
             raise ConfigError(
-                "images module collections must use comma-separated letters, numbers, _ or -"
+                "images module collections must be * or use comma-separated "
+                "letters, numbers, _ or -"
             )
 
         content_ids: list[str] = []
@@ -62,9 +78,13 @@ class ImagesModule:
                 )
             except OSError as exc:
                 raise ConfigError(f"image collection cannot be opened: {directory}") from exc
+            if not files and wildcard:
+                continue
             if not files:
                 raise ConfigError(f"image collection contains no PNG files: {directory}")
             content_ids.extend(f"{name}/{filename}" for filename in files)
+        if not content_ids:
+            raise ConfigError("image collections contain no PNG files")
         with self._lock:
             candidates = tuple(
                 content_id
@@ -92,7 +112,7 @@ class ImagesModule:
                     image,
                     size=(rect.width, rect.height),
                     fit="contain",
-                    binarize="threshold",
+                    binarize="grayscale",
                 )
         except OSError as exc:
             raise ConfigError(f"image asset cannot be opened: {path}") from exc

@@ -21,7 +21,7 @@ def process_image(
     trim: int = 0,
     content_scale: float = 1.0,
 ) -> Image.Image:
-    """Convert an image into a slot-sized 1-bit e-ink asset."""
+    """Convert an image into a slot-sized e-ink asset."""
     width, height = size
     if width <= 0 or height <= 0:
         raise ValueError("image size must be positive")

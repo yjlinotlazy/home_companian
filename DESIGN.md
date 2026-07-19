@@ -44,7 +44,7 @@ Device
 
 ### Application 与模块
 
-Home Companian 是整个产品，也是当前的应用。items、images、chinese、health 和 math 等模块拥有各自的内容加载、验证和选择逻辑。模块产生语义内容，不产生最终设备像素。
+Home Companian 是整个产品，也是当前的应用。items、images、chinese、health、math 和 checklist 等模块拥有各自的内容加载、验证和选择逻辑。模块产生语义内容，不拥有设备编码细节。
 
 随机/定时调度、推荐、AI 及未来互动属于 Application 层，不属于 Forge。
 
@@ -184,6 +184,8 @@ id,type,text
 ```text
 home_companian_library/
 ├── items.csv
+├── checklists.csv
+├── checklist_completions.csv
 ├── photos/
 │   └── family_trip.png
 └── images/
@@ -191,6 +193,8 @@ home_companian_library/
 ```
 
 - `items.csv`：个人提醒和家庭任务的统一文字数据源。
+- `checklists.csv`：每日清单定义，列固定为 `id,group,text`。
+- `checklist_completions.csv`：网页写入的每日完成结算，列固定为 `date,item_id,completed_at`。
 - `health/exercises.csv`：徒手动作名称、次数/时长和关键提示；两帧主图位于 `health/images/<id>/`。
 - `math/problems.csv`：算术和数学思维题，答案只保存在内容库中，第一版不显示。
 - `photos/`：已处理、可直接上屏的家庭图片。
@@ -268,7 +272,7 @@ status_bar:
 
 三组内部按配置顺序从左到右显示，左右边距为 16px，模块间距为 12px；模块越界或不同组发生重叠时直接报错。内置状态栏模块包括 `weekday`、`time`、`solar_term` 和 `date`。当前画面中央显示最近已经开始的二十四节气，右上角显示星期；`time` 和 `date` 保留实现但默认配置不显示。节气根据太阳视黄经计算，并按 UTC+8 的传统历法日期切换。
 
-当前已用单区域 `landscape_1`、双区域 `landscape_2` 和三区域 `landscape_3` 打通链路。内存中的下一屏已改为不可变 Scene；模块选择结果保存为 Scene fragments，模板和 slot 映射由 Forge 的 Presentation 独立持有。
+当前已用单区域 `landscape_1`、双区域 `landscape_2`、三区域 `landscape_3` 和 Kindle 四区域 `landscape_5` 打通链路。模板可以定义不属于任何 slot 的静态分隔线。内存中的下一屏使用 Scene fragments 保存模块选择结果，模板和 slot 映射由 Forge 的 Presentation 独立持有。
 
 当前配置：
 
@@ -300,7 +304,11 @@ panel:
     3: {module: chinese, source: select}
 ```
 
-`images` 模块可用 `collection` 指定一个图片集合，或用逗号分隔的 `collections` 指定多个集合并统一随机轮换；图片来自 `<library_dir>/images/<collection>/`，并避免连续重复。素材是已处理的 PNG 主图，允许不同尺寸和灰度模式；模块运行时按区域 `contain` 缩放并最终二值化，因此同一素材可用于不同模板。
+`images` 模块可用 `collection` 指定一个图片集合，用逗号分隔的 `collections` 指定多个集合，或用 `collections: "*"` 扫描 `<library_dir>/images/` 的所有直接子目录并统一随机轮换；名为 `raw` 的目录和空目录不参与，并避免连续重复。素材是已处理的 PNG 主图，允许不同尺寸和灰度模式；模块运行时按区域 `contain` 缩放并保留抗锯齿灰阶。Kindle 的灰度画布和 PNG encoder 保留并量化这些灰阶；CrowPanel 只在最终 1-bit encoder 中二值化。
+
+`checklist` 模块通过 `group` 选择 `checklists.csv` 中的一组项目，绘制标题、checkbox 和文字。Kindle 当前按 `瓜`、`果`、`家` 的顺序将三组放在 `landscape_5` 的三个区域，第四区使用 `images` 模块的全 collection 通配轮换。Kindle 客户端不接收或处理 checkbox 事件。
+
+网页通过 `POST /v1/checklists/{item_id}` 提交 `completed` boolean。勾选时为服务器本地日期写入唯一的 `(date,item_id)` 记录，取消时只删除当天记录。跨过午夜后，旧行继续作为历史结算保留，但不再影响当天 checkbox，因此无需定时清空任务。操作只影响服务端随后渲染的 Frame；已 ACK 的设备当前画面保持不变，Kindle 在下一次手动唤醒刷新时取得新状态。
 
 `chinese/full.md` 必须包含一年级至六年级标题，标题下汉字无需逐字换行；分类目前只供用户参考。`chinese/select.md` 只保存启用汉字。加载时忽略空白、去重并保序，同时拒绝非汉字、缺失年级标题及不属于完整字表的选择。
 
@@ -314,7 +322,8 @@ panel:
 
 当前网页行为：
 
-- 每个 Device Instance 有独立区块，均提供当前画面、随机预览、定时预览、“更改”、下一次刷新时间和下一帧缩略图。
+- 每个 Device Instance 有独立区块，均提供当前画面、下一次刷新时间和下一帧缩略图；只有包含 `items` 模块的 presentation 显示随机预览、定时预览和“更改”。
+- “今日清单”是独立于设备区块的服务端交互区；它写入完成结算并刷新各设备的下一帧缩略图。
 - 随机预览和定时预览不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
@@ -332,7 +341,7 @@ panel:
 
 ## 页面内容
 
-第一版画面显示内容模块，并在状态栏中央显示当前节气、右侧显示星期；不加标题、说明、边框或分隔线。
+CrowPanel 画面保持无标题、说明、边框或分隔线。Kindle 的 `landscape_5` 保留贯穿的横向分隔线；竖线只分隔上方的“瓜/果”，下方“家/图片”之间不画线。清单模块负责组名和 checkbox。
 
 第一版暂不加入项目图片、动画和交互控件。
 

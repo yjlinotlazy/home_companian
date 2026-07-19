@@ -11,6 +11,7 @@ from datetime import datetime, time
 from threading import Lock
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+from .checklists import ChecklistItem
 from .config import ConfigError, FontChoice, load_config
 from .devices import get_device_profile
 from .service import DisplayService, RenderedDisplay
@@ -26,6 +27,7 @@ class DevicePage:
     width: int
     height: int
     confirmed: bool
+    item_controls: bool = True
 
 
 def device_preview_png(rendered: RenderedDisplay) -> bytes:
@@ -41,6 +43,7 @@ def index_html(
     latin_fonts: tuple[FontChoice, ...],
     selected_latin_font: Path,
     devices: tuple[DevicePage, ...],
+    checklist_items: tuple[tuple[ChecklistItem, bool], ...] = (),
 ) -> bytes:
     current_time = datetime.now().strftime("%H:%M")
 
@@ -67,6 +70,15 @@ def index_html(
         encoded_id = quote(device.id, safe="")
         label = escape(device_label(device.id, device.profile_id))
         unconfirmed = " hidden" if device.confirmed else ""
+        controls = ""
+        if device.item_controls:
+            controls = f"""<div class="controls-grid">
+        <div>随机预览 <button type="button" data-action="random-preview">换一个</button>
+        <button type="button" data-action="change" disabled>更改</button>
+        <span data-change-status></span></div>
+        <div><label>定时预览 <input type="time" data-preview-time value="{current_time}"></label>
+        <button type="button" data-action="time-preview">预览</button></div>
+      </div>"""
         return f"""<section class="device-section" data-device-id="{device_id}"
          style="--device-width:{device.width}px">
   <h2>{label} <small>{device_id}</small></h2>
@@ -77,13 +89,7 @@ def index_html(
            width="{device.width}" height="{device.height}"
            alt="{label} display preview">
       <p data-unconfirmed{unconfirmed}>设备尚未确认显示画面</p>
-      <div class="controls-grid">
-        <div>随机预览 <button type="button" data-action="random-preview">换一个</button>
-        <button type="button" data-action="change" disabled>更改</button>
-        <span data-change-status></span></div>
-        <div><label>定时预览 <input type="time" data-preview-time value="{current_time}"></label>
-        <button type="button" data-action="time-preview">预览</button></div>
-      </div>
+      {controls}
     </div>
     <aside class="next-refresh">
       <span>下次刷新：<span data-next-refresh-time>加载中</span></span>
@@ -95,6 +101,24 @@ def index_html(
     device_sections = '<hr class="device-divider">'.join(
         render_device(device) for device in devices
     )
+    grouped_checklists: dict[str, list[tuple[ChecklistItem, bool]]] = {}
+    for item, completed in checklist_items:
+        grouped_checklists.setdefault(item.group, []).append((item, completed))
+    checklist_groups = "".join(
+        f'<fieldset><legend>{escape(group)}</legend>'
+        + "".join(
+            f'<label><input type="checkbox" data-checklist-id="{item.id}"'
+            f'{" checked" if completed else ""}> {escape(item.text)}</label>'
+            for item, completed in items
+        )
+        + "</fieldset>"
+        for group, items in grouped_checklists.items()
+    )
+    checklist_controls = f"""<section class="checklist-controls">
+<h2>今日清单</h2>
+<div class="checklist-grid">{checklist_groups}</div>
+<p data-checklist-status></p>
+</section>"""
     font_controls = f"""<section class="font-controls">
 <h2>全局字体</h2>
 <div class="controls-grid">
@@ -121,11 +145,19 @@ def index_html(
 .device-preview {{ display:block; width:100%; height:auto; border:1px solid #888; }}
 .device-section small {{ font-size:.55em; font-weight:normal; color:#555; }}
 .font-controls {{ margin-top:2.5rem; }}
-@media (max-width: 760px) {{ .display-layout {{ grid-template-columns:minmax(0,1fr); }} }}
+.checklist-controls {{ margin-top:2rem; width:fit-content; max-width:100%; }}
+.checklist-grid {{ display:grid; grid-template-columns:repeat(3,minmax(140px,190px)); gap:.5rem; justify-content:start; }}
+.checklist-grid fieldset {{ display:grid; gap:.3rem; margin:0; padding:.35rem .55rem .5rem; }}
+.checklist-grid label {{ white-space:nowrap; }}
+@media (max-width: 760px) {{
+  .display-layout {{ grid-template-columns:minmax(0,1fr); }}
+  .checklist-grid {{ grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }}
+}}
 </style></head>
 <body style="font-family:sans-serif;margin:2rem;background:#eee">
   <h1>Home Companian</h1>
   {device_sections}
+  {checklist_controls}
   {font_controls}
 <script>
 const nextRefreshTimers = new Map();
@@ -166,27 +198,44 @@ async function loadNextRefresh(section) {{
 }}
 
 document.querySelectorAll('.device-section').forEach(section => {{
-  section.querySelector('[data-action="random-preview"]').addEventListener('click', () => {{
-    preview(section, 'mode=random');
-  }});
-  section.querySelector('[data-action="time-preview"]').addEventListener('click', () => {{
-    const value = section.querySelector('[data-preview-time]').value;
-    if (value) preview(section, 'time=' + encodeURIComponent(value));
-  }});
-  section.querySelector('[data-action="change"]').addEventListener('click', async () => {{
-    const itemId = section.dataset.previewItemId;
-    if (!itemId) return;
-    const response = await fetch(
-      devicePath(section, 'change') + '?item=' + encodeURIComponent(itemId),
-      {{method: 'POST'}}
-    );
-    if (!response.ok) throw new Error(await response.text());
-    delete section.dataset.previewItemId;
-    section.querySelector('[data-action="change"]').disabled = true;
-    section.querySelector('[data-change-status]').textContent = '已设为下次刷新';
-    loadNextRefresh(section);
-  }});
+  const randomButton = section.querySelector('[data-action="random-preview"]');
+  if (randomButton) {{
+    randomButton.addEventListener('click', () => preview(section, 'mode=random'));
+    section.querySelector('[data-action="time-preview"]').addEventListener('click', () => {{
+      const value = section.querySelector('[data-preview-time]').value;
+      if (value) preview(section, 'time=' + encodeURIComponent(value));
+    }});
+    section.querySelector('[data-action="change"]').addEventListener('click', async () => {{
+      const itemId = section.dataset.previewItemId;
+      if (!itemId) return;
+      const response = await fetch(
+        devicePath(section, 'change') + '?item=' + encodeURIComponent(itemId),
+        {{method: 'POST'}}
+      );
+      if (!response.ok) throw new Error(await response.text());
+      delete section.dataset.previewItemId;
+      section.querySelector('[data-action="change"]').disabled = true;
+      section.querySelector('[data-change-status]').textContent = '已设为下次刷新';
+      loadNextRefresh(section);
+    }});
+  }}
   loadNextRefresh(section);
+}});
+
+document.querySelectorAll('[data-checklist-id]').forEach(checkbox => {{
+  checkbox.addEventListener('change', async () => {{
+    const response = await fetch('/v1/checklists/' + checkbox.dataset.checklistId, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{completed: checkbox.checked}})
+    }});
+    if (!response.ok) {{
+      checkbox.checked = !checkbox.checked;
+      throw new Error(await response.text());
+    }}
+    document.querySelector('[data-checklist-status]').textContent = '已保存；Kindle 下次唤醒时更新';
+    document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+  }});
 }});
 
 document.querySelectorAll('[data-font-apply]').forEach(button => {{
@@ -247,6 +296,19 @@ def parse_device_route(path: str, action: str) -> str | None:
     return None
 
 
+def parse_checklist_route(path: str) -> int | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[:2] != ["v1", "checklists"]:
+        return None
+    try:
+        item_id = int(parts[2])
+    except ValueError as exc:
+        raise ValueError("checklist item id must be a positive integer") from exc
+    if item_id <= 0:
+        raise ValueError("checklist item id must be a positive integer")
+    return item_id
+
+
 class DeviceServices:
     def __init__(self, config_path: Path, default_service: DisplayService) -> None:
         self.config_path = config_path
@@ -264,6 +326,11 @@ class DeviceServices:
                 service = DisplayService(self.config_path, device_id=device_id)
                 self._services[device_id] = service
             return service
+
+    def refresh_prepared_checklists(self) -> None:
+        configured = load_config(self.config_path)
+        for device in configured.devices:
+            self.get(device.id).refresh_prepared_checklists()
 
 
 def make_handler(
@@ -400,9 +467,14 @@ def make_handler(
                                         ).render_current()
                                         is not None
                                     ),
+                                    item_controls=any(
+                                        slot.module == "items"
+                                        for slot in device.presentation.panel.slots
+                                    ),
                                 )
                                 for device in config.devices
                             ),
+                            service.checklist_items(),
                         ),
                     )
                 elif request.path == "/display.bin":
@@ -432,6 +504,7 @@ def make_handler(
             try:
                 ack_device_id = parse_device_route(request.path, "ack")
                 change_device_id = parse_device_route(request.path, "change")
+                checklist_item_id = parse_checklist_route(request.path)
                 if ack_device_id is not None:
                     body = self._read_json()
                     frame_id = body.get("frame_id")
@@ -450,6 +523,17 @@ def make_handler(
                     self._send_json(
                         HTTPStatus.OK,
                         {"item_id": item_id, "next_at": next_at.isoformat()},
+                    )
+                elif checklist_item_id is not None:
+                    body = self._read_json()
+                    completed = body.get("completed")
+                    if type(completed) is not bool:
+                        raise ValueError("completed must be a boolean")
+                    service.set_checklist_completed(checklist_item_id, completed)
+                    device_services.refresh_prepared_checklists()
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"item_id": checklist_item_id, "completed": completed},
                     )
                 elif request.path == "/font":
                     group = parse_qs(request.query).get("group", [None])[0]

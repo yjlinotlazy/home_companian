@@ -1,4 +1,5 @@
 from .base import Module
+from .checklist import ChecklistModule
 from .chinese import ChineseModule
 from .images import ImagesModule
 from .health import HealthModule
@@ -7,6 +8,7 @@ from .math import MathModule
 
 __all__ = [
     "ChineseModule",
+    "ChecklistModule",
     "HealthModule",
     "ImagesModule",
     "ItemsModule",

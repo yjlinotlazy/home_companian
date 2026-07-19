@@ -12,12 +12,14 @@ import yaml
 
 from PIL import Image
 
+from .checklists import ChecklistItem, ChecklistStore
 from .config import Config, ConfigError, DEFAULT_CONFIG_PATH, Item, Settings, load_config
 from .devices import get_device_profile
 from .forge.engine import Forge
 from .forge.models import Frame, Presentation, Scene, SceneFragment
 from .modules import (
     ChineseModule,
+    ChecklistModule,
     HealthModule,
     ImagesModule,
     ItemsModule,
@@ -65,6 +67,7 @@ class DisplayService:
         self.preview_items_module = ItemsModule(RandomSelector())
         self.device_modules: dict[str, Module] = {
             "items": self.device_items_module,
+            "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
@@ -72,6 +75,7 @@ class DisplayService:
         }
         self.preview_modules: dict[str, Module] = {
             "items": self.preview_items_module,
+            "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
@@ -228,9 +232,10 @@ class DisplayService:
 
     def _load_current_display(self) -> RenderedDisplay | None:
         try:
-            with Image.open(self.current_display_path) as source:
-                image = source.convert("1")
             profile = get_device_profile(self.settings().profile_id)
+            image_mode = "L" if profile.grayscale_levels > 2 else "1"
+            with Image.open(self.current_display_path) as source:
+                image = source.convert(image_mode)
             frame = self.forge.encode(image, "restored-current", profile, datetime.now())
         except (OSError, ValueError, ConfigError):
             return None
@@ -359,6 +364,50 @@ class DisplayService:
             except OSError as exc:
                 raise ConfigError(f"config file cannot be updated: {self.config_path}") from exc
             return choice.path
+
+    def checklist_items(
+        self,
+        now: datetime | None = None,
+    ) -> tuple[tuple[ChecklistItem, bool], ...]:
+        now = now or datetime.now()
+        store = ChecklistStore(self.settings().library_dir)
+        completed_ids = store.completed_ids(now.date())
+        return tuple((item, item.id in completed_ids) for item in store.items())
+
+    def set_checklist_completed(
+        self,
+        item_id: int,
+        completed: bool,
+        now: datetime | None = None,
+    ) -> None:
+        ChecklistStore(self.settings().library_dir).set_completed(
+            item_id,
+            completed,
+            now,
+        )
+
+    def refresh_prepared_checklists(self) -> None:
+        settings = self.settings()
+        with self._next_scene_lock:
+            if (
+                self._next_scene is None
+                or self._next_scene_key != self._scene_key(settings)
+            ):
+                return
+            at = self._next_scene.target_at or datetime.now()
+            fragments = list(self._next_scene.fragments)
+            for index, assignment in enumerate(settings.panel.slots):
+                if assignment.module != ChecklistModule.name:
+                    continue
+                fragments[index] = SceneFragment(
+                    fragments[index].id,
+                    assignment.module,
+                    self.device_modules[assignment.module].prepare(
+                        settings, at, assignment
+                    ),
+                    assignment.module,
+                )
+            self._next_scene = Scene.create(tuple(fragments), self._next_scene.target_at)
 
     def next_check_seconds(self, now: datetime | None = None) -> int:
         settings = self.settings()

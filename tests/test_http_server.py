@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 
+from home_companian.checklists import ChecklistItem
 from home_companian.config import FontChoice
 from home_companian.devices import KINDLE_6_167PPI_LANDSCAPE
 from home_companian.forge.engine import Forge
@@ -18,6 +19,7 @@ from home_companian.http_server import (
     index_html,
     is_random_preview,
     parse_item_id,
+    parse_checklist_route,
     parse_device_route,
     parse_font_name,
     parse_preview_time,
@@ -35,6 +37,12 @@ class HttpServerTests(unittest.TestCase):
         )
         self.assertEqual(parse_device_route("/v1/devices/wall/ack", "ack"), "wall")
         self.assertIsNone(parse_device_route("/display.bin", "next"))
+
+    def test_parses_checklist_route(self) -> None:
+        self.assertEqual(parse_checklist_route("/v1/checklists/3"), 3)
+        self.assertIsNone(parse_checklist_route("/v1/devices/wall/next"))
+        with self.assertRaises(ValueError):
+            parse_checklist_route("/v1/checklists/nope")
 
     def test_kindle_browser_preview_stays_in_logical_landscape_orientation(self) -> None:
         source = Image.new("RGB", (800, 600), "white")
@@ -73,6 +81,7 @@ class HttpServerTests(unittest.TestCase):
             (FontChoice("Caskaydia", Path("/fonts/caskaydia.ttf")),),
             Path("/fonts/caskaydia.ttf"),
             (DevicePage("wall_panel", "crowpanel_579", 792, 272, True),),
+            ((ChecklistItem(1, "瓜", "EAT"), True),),
         )
         self.assertIn("换一个".encode(), page)
         self.assertIn("定时预览".encode(), page)
@@ -86,6 +95,8 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn(b"data-next-refresh-time", page)
         self.assertIn(b"/v1/devices/", page)
         self.assertIn(b'<option value="\xe9\x9c\x9e\xe9\xb9\x9c\xe6\x96\x87\xe6\xa5\xb7" selected>', page)
+        self.assertIn("今日清单".encode(), page)
+        self.assertIn(b'data-checklist-id="1" checked', page)
 
     def test_index_stacks_crowpanel_then_kindle(self) -> None:
         page = index_html(
@@ -96,7 +107,12 @@ class HttpServerTests(unittest.TestCase):
             devices=(
                 DevicePage("wall_panel", "crowpanel_579", 792, 272, True),
                 DevicePage(
-                    "kindleGen7dk", "kindle_6_167ppi_landscape", 800, 600, False
+                    "kindleGen7dk",
+                    "kindle_6_167ppi_landscape",
+                    800,
+                    600,
+                    False,
+                    False,
                 ),
             ),
         ).decode()
@@ -108,7 +124,7 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn('/v1/devices/kindleGen7dk/preview.png', page)
         self.assertIn("<p data-unconfirmed>设备尚未确认显示画面</p>", page)
         self.assertEqual(
-            page.count('<button type="button" data-action="random-preview">'), 2
+            page.count('<button type="button" data-action="random-preview">'), 1
         )
         self.assertEqual(page.count("<img data-next-preview"), 2)
 

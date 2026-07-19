@@ -50,6 +50,15 @@ class TemplateTests(unittest.TestCase):
             (800, 560),
         )
 
+    def test_loads_kindle_checklist_template_with_dividers(self) -> None:
+        template = load_template("landscape_5")
+        self.assertEqual((template.width, template.height), (800, 560))
+        self.assertEqual(len(template.slots), 4)
+        self.assertEqual(
+            template.lines,
+            ((400, 0, 400, 279), (0, 280, 799, 280)),
+        )
+
     def test_rejects_assignment_to_unknown_slot(self) -> None:
         panel = PanelConfig("landscape_1", (SlotAssignment(2, "items"),))
         with self.assertRaisesRegex(ConfigError, "has no slot 2"):

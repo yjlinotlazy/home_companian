@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Mapping
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from ..config import ConfigError, Settings
 from ..devices import DeviceProfile
@@ -30,7 +30,8 @@ def compose_scene(
             f"{profile.width}x{profile.content_height} for profile {profile.id}"
         )
     fragments = {fragment.id: fragment for fragment in scene.fragments}
-    image = Image.new("1", (profile.width, profile.height), 255)
+    canvas_mode = "L" if profile.grayscale_levels > 2 else "1"
+    image = Image.new(canvas_mode, (profile.width, profile.height), 255)
     image.paste(
         render_status_bar(
             settings,
@@ -54,4 +55,8 @@ def compose_scene(
             raise ConfigError(f"unknown module: {fragment.module}")
         tile = module.render(settings, fragment.content_id, rect, now)
         image.paste(tile, (rect.x, rect.y + profile.status_bar_height))
+    draw = ImageDraw.Draw(image)
+    for x1, y1, x2, y2 in template.lines:
+        offset = profile.status_bar_height
+        draw.line((x1, y1 + offset, x2, y2 + offset), fill=0, width=2)
     return image

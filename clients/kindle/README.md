@@ -39,7 +39,7 @@ unmount: udisksctl unmount -b /dev/sda1
 
 ### SSH
 
-KOReader 自带 SSH，这是目前找到的最简单入口。
+KOReader 自带 SSH，这是目前找到的最简单入口。ssh一定要搞，开发测试会方便很多。
 
 koreader直接下载：https://github.com/koreader/koreader/releases。要查一下适配版本。
 

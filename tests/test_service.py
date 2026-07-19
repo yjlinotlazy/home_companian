@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from PIL import Image
 import yaml
 
 from home_companian.service import DisplayService
@@ -281,6 +282,42 @@ class DisplayServiceTests(unittest.TestCase):
             restarted.render_next(now=datetime(2026, 7, 15, 12, 45)).item_id,
             2,
         )
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_checklist_change_updates_prepared_frame_without_changing_other_content(self) -> None:
+        root = self.config_path.parent
+        (root / "checklists.csv").write_text(
+            "id,group,text\n1,瓜,EAT\n2,家,READ\n3,果,SHOWER\n",
+            encoding="utf-8",
+        )
+        collection = root / "images" / "etc"
+        collection.mkdir(parents=True)
+        Image.new("1", (100, 100), 255).save(collection / "only.png")
+        content = self.config_path.read_text(encoding="utf-8")
+        content = content.replace("mode: scheduled", "mode: random")
+        content = content.replace("profile: crowpanel_579", "profile: kindle_6_167ppi_landscape")
+        content = content.replace(
+            "        template: landscape_1\n"
+            "        slots:\n"
+            "          1: {module: items}\n",
+            "        template: landscape_5\n"
+            "        slots:\n"
+            "          1: {module: checklist, group: 瓜}\n"
+            "          2: {module: checklist, group: 家}\n"
+            "          3: {module: checklist, group: 果}\n"
+            "          4: {module: images, collection: etc}\n",
+        )
+        self.config_path.write_text(content, encoding="utf-8")
+        now = datetime(2026, 7, 19, 12, 30)
+
+        before = self.service.render_next(now)
+        self.service.set_checklist_completed(1, True, now)
+        self.service.refresh_prepared_checklists()
+        after = self.service.render_next(now)
+
+        self.assertEqual(before.image.mode, "L")
+        self.assertNotEqual(before.frame.id, after.frame.id)
+        self.assertNotEqual(before.image.tobytes(), after.image.tobytes())
 
 
 if __name__ == "__main__":

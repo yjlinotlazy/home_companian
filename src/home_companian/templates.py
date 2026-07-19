@@ -30,7 +30,9 @@ def validate_panel(panel: PanelConfig) -> Template:
             raise ConfigError(
                 f"template {template.id} has no slot {assignment.slot_id}"
             )
-        if assignment.module not in {"items", "chinese", "images", "health", "math"}:
+        if assignment.module not in {
+            "items", "chinese", "images", "health", "math", "checklist"
+        }:
             raise ConfigError(f"unknown module: {assignment.module}")
     return template
 
@@ -39,12 +41,17 @@ def _parse_template(raw: dict[str, Any], requested_id: str) -> Template:
     template_id = raw.get("id")
     size = raw.get("size")
     raw_slots = raw.get("slots")
+    raw_lines = raw.get("lines", [])
     if template_id != requested_id:
         raise ConfigError(f"template id mismatch: {requested_id}")
     if not _integer_list(size, 2) or size[0] <= 0 or size[1] <= 0:
         raise ConfigError(f"template {template_id}.size must contain width and height")
     if not isinstance(raw_slots, dict) or not raw_slots:
         raise ConfigError(f"template {template_id}.slots must be a non-empty mapping")
+    if not isinstance(raw_lines, list) or not all(
+        _integer_list(line, 4) for line in raw_lines
+    ):
+        raise ConfigError(f"template {template_id}.lines must contain x1,y1,x2,y2 lists")
 
     width, height = size
     slots: list[tuple[int, Rect]] = []
@@ -68,7 +75,15 @@ def _parse_template(raw: dict[str, Any], requested_id: str) -> Template:
                 raise ConfigError(
                     f"template {template_id} slots {slot_id} and {other_id} overlap"
                 )
-    return Template(template_id, width, height, tuple(sorted(slots)))
+    lines: list[tuple[int, int, int, int]] = []
+    for line in raw_lines:
+        x1, y1, x2, y2 = line
+        if not all(
+            (0 <= x1 < width, 0 <= x2 < width, 0 <= y1 < height, 0 <= y2 < height)
+        ):
+            raise ConfigError(f"template {template_id} line is out of bounds")
+        lines.append((x1, y1, x2, y2))
+    return Template(template_id, width, height, tuple(sorted(slots)), tuple(lines))
 
 
 def _integer_list(value: Any, length: int) -> bool:

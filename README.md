@@ -29,7 +29,7 @@ CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 
 - 24 点等数学小游戏。
 - 节气、星期等状态栏信息。
 
-目前支持定时和随机两种内容选择方式。互动、任务领取、完成记录和奖励系统仍是后续方向。
+目前支持定时和随机两种内容选择方式。每日清单在网页勾选，Kindle 下次唤醒时显示完成状态；设备本身不处理互动。任务领取和奖励系统仍是后续方向。
 
 ## 支持的设备
 
@@ -53,6 +53,50 @@ CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 
 - `clients/kindle/gen7dk/`：Kindle Gen 7 客户端；部署方法见其 [README.md](clients/kindle/gen7dk/README.md)。
 
 各客户端保留自己的工具链和局部 `.gitignore`，但共同遵守 [PROTOCOL.md](PROTOCOL.md)。CrowPanel 目前仍通过兼容接口工作；Kindle 使用 PNG → 显示 → ACK → 休眠的通用协议链路。
+
+## Kindle 更新与重启速查
+
+如果只修改了服务端、模板、模块、配置或内容库，不需要重新复制 Kindle 客户端。重启服务器后，手动唤醒 Kindle，它会自动下载、显示并 ACK 新 Frame。
+
+只有 `clients/kindle/gen7dk/*.sh` 发生变化时，才需要更新 Kindle 脚本。先在 Kindle SSH 终端停止旧 daemon：
+
+```sh
+cd /mnt/us/home_companian
+./control.sh stop
+```
+
+然后在 Linux 的 repo 根目录复制脚本；这不会覆盖 Kindle 上的 `client.conf`：
+
+```bash
+scp -P <SSH端口> \
+  clients/kindle/gen7dk/client.sh \
+  clients/kindle/gen7dk/daemon.sh \
+  clients/kindle/gen7dk/control.sh \
+  root@<Kindle-IP>:/mnt/us/home_companian/
+```
+
+回到 Kindle SSH 终端，恢复权限并启动：
+
+```sh
+cd /mnt/us/home_companian
+chmod +x client.sh daemon.sh control.sh
+./control.sh start
+./control.sh status
+```
+
+立即测试一次完整的下载 → 显示 → ACK：
+
+```sh
+./control.sh refresh
+```
+
+查看最近日志：
+
+```sh
+tail -n 30 /mnt/us/home_companian/client.log
+```
+
+普通按电源键只是休眠/唤醒，daemon 会继续运行。Kindle 菜单 Restart、长按电源键重启、电池耗尽或系统更新后，需重新 SSH 登录并执行 `./control.sh start`。首次安装、HTTPS 根证书和 `client.conf` 配置见 [Kindle Gen 7 完整部署文档](clients/kindle/gen7dk/README.md)。
 
 ## 运行(服务器端)
 
@@ -121,7 +165,7 @@ devices:
 
 Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪个 Channel、何时刷新以及如何排版。完整示例见 [config.example.yaml](config.example.yaml)。
 
-主页为每台配置设备分别显示当前画面、随机/定时预览、“更改”、下一次刷新时间和下一帧缩略图。临时预览不会改变设备当前画面；某个设备区块中的“更改”只影响该设备的下一屏。字体菜单暂时全局共享，候选来自配置中的 `fonts` 和 `latin_fonts`。
+主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧缩略图；包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 
 设备专用 `preview.png` 优先显示设备已 ACK 的当前画面；尚无 ACK 时仍返回服务端生成的候选图，并在主页标注“设备尚未确认显示画面”，方便接入和调试。
 
@@ -132,6 +176,8 @@ Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪
 ```text
 home_companian_library/
 ├── items.csv
+├── checklists.csv
+├── checklist_completions.csv
 ├── chinese/
 │   ├── full.md
 │   └── select.md
@@ -142,16 +188,21 @@ home_companian_library/
 │   └── problems.csv
 ├── images/
 │   ├── plants/
-│   └── animals/
+│   ├── animals/
+│   └── etc/
 └── photos/
 ```
 
 - `items.csv`：`id,type,text`。
+- `checklists.csv`：`id,group,text`；同一 `group` 的项目显示在同一个清单区块。
+- `checklist_completions.csv`：`date,item_id,completed_at`；由网页维护，不需要手写。历史不会在午夜删除，但只有当天记录会显示为已完成。
 - `health/exercises.csv`：`id,name,dose,instruction`。
 - `math/problems.csv`：`id,type,question,answer`；答案暂不显示。
 - `chinese/full.md`：按一年级至六年级列出完整字表。
 - `chinese/select.md`：只写当前启用的汉字。
 - `images/` 和 `photos/`：供显示使用的已处理图片；集合中的 `raw/` 不参与轮换。
+
+Kindle 当前使用 `landscape_5`：`瓜`、`果`、`家` 三个清单依次占三个区域，第四个区域从 `images/` 的所有直接子目录随机选取 PNG。配置写作 `{module: images, collections: "*"}`；名为 `raw` 的目录、各集合内部的 `raw/` 和空目录都不参与轮换。网页取消当天勾选时，只删除当天对应记录；以前日期的结算保留。
 
 模块、模板和各文件的详细约束见 [DESIGN.md](DESIGN.md)。
 

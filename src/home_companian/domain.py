@@ -15,6 +15,7 @@ class Template:
     width: int
     height: int
     slots: tuple[tuple[int, Rect], ...]
+    lines: tuple[tuple[int, int, int, int], ...] = ()
 
     def slot(self, slot_id: int) -> Rect:
         for candidate_id, rect in self.slots:

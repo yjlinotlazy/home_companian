@@ -54,6 +54,29 @@ class ImagesModuleTests(unittest.TestCase):
             second = module.prepare(self.settings, datetime.now(), assignment)
         self.assertEqual((first, second), ("animals/cat.png", "plants/b.png"))
 
+    def test_wildcard_scans_all_image_collection_directories(self) -> None:
+        animals = self.library / "images" / "animals"
+        animals.mkdir()
+        Image.new("1", (200, 200), 255).save(animals / "cat.png")
+        raw = self.library / "images" / "raw"
+        raw.mkdir()
+        Image.new("1", (200, 200), 255).save(raw / "source.png")
+        (self.library / "images" / "empty").mkdir()
+        assignment = SlotAssignment(
+            1, "images", (("collections", "*"),)
+        )
+        module = ImagesModule()
+        with patch(
+            "home_companian.modules.images.random.choice",
+            side_effect=lambda values: values[0],
+        ) as choice:
+            module.prepare(self.settings, datetime.now(), assignment)
+
+        self.assertEqual(
+            set(choice.call_args.args[0]),
+            {"animals/cat.png", "plants/a.png", "plants/b.png"},
+        )
+
     def test_renders_preprocessed_asset_without_resizing(self) -> None:
         image = ImagesModule().render(
             self.settings,
@@ -61,7 +84,7 @@ class ImagesModuleTests(unittest.TestCase):
             Rect(0, 0, 200, 200),
             datetime.now(),
         )
-        self.assertEqual((image.size, image.mode), ((200, 200), "1"))
+        self.assertEqual((image.size, image.mode), ((200, 200), "L"))
 
     def test_resizes_grayscale_master_to_slot_at_runtime(self) -> None:
         Image.new("L", (400, 100), 0).save(self.collection / "wide.png")
@@ -71,7 +94,7 @@ class ImagesModuleTests(unittest.TestCase):
             Rect(0, 0, 100, 100),
             datetime.now(),
         )
-        self.assertEqual((rendered.size, rendered.mode), ((100, 100), "1"))
+        self.assertEqual((rendered.size, rendered.mode), ((100, 100), "L"))
         self.assertEqual(rendered.getpixel((50, 0)), 255)
         self.assertEqual(rendered.getpixel((50, 50)), 0)
 

@@ -4,6 +4,8 @@
 
 当前实机 framebuffer 为 600×800、约 167 PPI。设备按“正常竖屏姿势逆时针旋转 90°”横放；Forge 按 800×600 排版，再将设备 Frame 顺时针旋转成 `eips` 接收的 600×800 PNG。服务端 Device Instance ID 是 `kindleGen7dk`，Profile 是 `kindle_6_167ppi_landscape`。
 
+当前横屏画面使用三个每日清单区和一个随机图片区。checkbox 只能在服务器网页操作；Kindle 客户端仍只下载、显示和 ACK Frame。
+
 ## 工作方式
 
 - 首次运行：下载 `/next` → `eips` 全刷 → 提交 `displayed` ACK。

@@ -56,6 +56,9 @@ devices:
         right:
           - module: weekday
       panel:
-        template: landscape_4
+        template: landscape_5
         slots:
-          1: {module: items}
+          1: {module: checklist, group: 瓜}
+          2: {module: checklist, group: 果}
+          3: {module: checklist, group: 家}
+          4: {module: images, collections: "*"}
