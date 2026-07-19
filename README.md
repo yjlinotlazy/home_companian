@@ -4,7 +4,7 @@
 
 CrowPanel ESP32 链路已经可用。Kindle 的服务端 PNG 和协议已经完成，设备端客户端待接入。浏览器目前是预览和管理界面，不是独立显示设备。
 
-内部架构见 [DESIGN.md](DESIGN.md)，设备 HTTP 契约见 [PROTOCOL.md](PROTOCOL.md)，迭代计划见 [MILESTONE.md](MILESTONE.md)。
+高层架构和 monorepo 边界见 [ARCHITECTURE.md](ARCHITECTURE.md)，服务端与应用细节见 [DESIGN.md](DESIGN.md)，设备 HTTP 契约见 [PROTOCOL.md](PROTOCOL.md)，迭代计划见 [MILESTONE.md](MILESTONE.md)。
 
 ## 效果示例
 
@@ -47,7 +47,14 @@ CrowPanel ESP32 链路已经可用。Kindle 的服务端 PNG 和协议已经完�
 
 通用设备接口使用配置中的 ID，例如 `/v1/devices/kindleGen7dk/next`。`/display.bin` 是唯一保留的旧固件兼容口，固定服务 `wall_panel`。
 
-## 运行
+设备端源码与服务端放在同一仓库：
+
+- `clients/crowpanel/crowpanel-579/`：当前 CrowPanel ESP-IDF 客户端；部署方法见其 [README.md](clients/crowpanel/crowpanel-579/README.md)。
+- `clients/kindle/gen7dk/`：计划中的 Kindle Gen 7 客户端。
+
+各客户端保留自己的工具链和局部 `.gitignore`，但共同遵守 [PROTOCOL.md](PROTOCOL.md)。CrowPanel 目前仍通过兼容接口工作；新的 Kindle 客户端将首先打通 PNG → 显示 → ACK → 休眠的通用协议链路。
+
+## 运行(服务器端)
 
 安装依赖：
 

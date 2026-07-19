@@ -149,6 +149,7 @@ M1–M9 记录 CrowPanel baseline。当前代码已迁移到 Application → Sce
 
 ## M13：Kindle PNG 客户端
 
+- [x] 将现有 CrowPanel ESP-IDF 客户端纳入 `clients/crowpanel/crowpanel-579/`，作为 monorepo 客户端基线。
 - [ ] 验证 Kindle 的实际运行入口：浏览器、越狱扩展或其他本地客户端。
 - [x] 定义 `kindle_6_212ppi` Device Profile 和 `portrait_1` presentation。
 - [x] 实现 16 级灰度 PNG backend。

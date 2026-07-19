@@ -1,5 +1,7 @@
 # Home Companian 设计文档
 
+本文描述服务端和当前家庭显示应用的详细设计。项目级边界、薄客户端原则和 monorepo 决策以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
+
 ## 产品目标
 
 家宠是运行在家庭服务器上的多设备显示项目。服务端持有内容、调度、排版和渲染逻辑；CrowPanel、Kindle 及未来设备是稳定、可复用的薄客户端。
@@ -99,7 +101,7 @@ src/home_companian/
 └── devices/        # instances、profiles、capabilities、投递状态
 ```
 
-这是目标边界，不要求目录与分层一一对应。当前 `forge/` 和 `devices/` 已独立；Application 与 HTTP Protocol 仍有部分逻辑集中在 `service.py` 和 `http_server.py`，后续按实际复杂度再拆。设备端客户端可以因工具链不同继续放在独立项目中；本 repo 只要求服务端 Device Profile 和协议契约稳定。
+这是服务端目标边界，不要求目录与分层一一对应。当前 `forge/` 和 `devices/` 已独立；Application 与 HTTP Protocol 仍有部分逻辑集中在 `service.py` 和 `http_server.py`，后续按实际复杂度再拆。设备客户端统一放在本 repo 的 `clients/`，各自保留独立工具链；服务端 Device Profile 和协议契约与客户端共同演进。
 
 ## 当前 CrowPanel Profile
 
@@ -110,7 +112,7 @@ src/home_companian/
 - 当前驱动要求 framebuffer 包含接缝映射及 180 度旋转。
 - 刷新后电子墨水屏会保持画面，不需要服务端持续推送。
 
-参考硬件测试项目：`/home/yli/Embedded/esp32/crowpanel-579-epaper`。
+CrowPanel ESP-IDF 客户端已纳入本仓库：`clients/crowpanel/crowpanel-579/`。
 
 ## 当前 CrowPanel Baseline
 
@@ -339,7 +341,7 @@ panel:
 配置通过绝对路径指向内容库：
 
 ```yaml
-library_dir: /home/yli/Dropbox/home_companian_library
+library_dir: /path/to/home_companian_library
 ```
 
 `~/.config` 不存放文字条目、照片或通用图片。
