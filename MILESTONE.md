@@ -141,7 +141,7 @@ M1–M9 记录 CrowPanel baseline。当前代码已迁移到 Application → Sce
 - [x] 实现不可变 Frame ID、Scene ID、profile ID 和 MIME type 响应元数据。
 - [x] 实现 `POST /v1/devices/{device_id}/ack`，区分已发送与设备确认显示。
 - [ ] 为每台设备保存独立的 current Frame、目标 Frame、下次检查时间和错误状态。
-- [ ] 网页按 Device Instance 显示当前画面、下一帧和 ACK 状态。
+- [x] 网页按 Device Instance 显示当前画面、独立预览/更改、下一帧和确认状态。
 - [x] 保留 `GET /display.bin` 作为 CrowPanel 固件接口。
 - [ ] 添加重复 GET、重复 ACK、离线恢复和失败重试测试。
 
@@ -150,10 +150,15 @@ M1–M9 记录 CrowPanel baseline。当前代码已迁移到 Application → Sce
 ## M13：Kindle PNG 客户端
 
 - [x] 将现有 CrowPanel ESP-IDF 客户端纳入 `clients/crowpanel/crowpanel-579/`，作为 monorepo 客户端基线。
-- [ ] 验证 Kindle 的实际运行入口：浏览器、越狱扩展或其他本地客户端。
-- [x] 定义 `kindle_6_212ppi` Device Profile 和 `portrait_1` presentation。
+- [x] 验证 Kindle 可通过 SSH 下的 `curl` 和系统 `eips` 下载、显示并全刷 PNG。
+- [x] 根据 `eips -i` 实测定义 Kindle 物理屏幕参数和竖屏 profile。
+- [x] 增加 `kindle_6_167ppi_landscape`、800×600 横屏排版及逻辑画布到物理 PNG 的旋转。
 - [x] 实现 16 级灰度 PNG backend。
-- [ ] Kindle 能请求 PNG、显示、提交 ACK，并按建议时间再次检查。
+- [x] 未 ACK 时在网页显示服务端候选图，并明确标注设备尚未确认。
+- [x] Kindle 单次脚本能请求 PNG、显示并提交 ACK。
+- [x] Kindle 手动唤醒后等待 Wi-Fi 并刷新；休眠时重画缓存图覆盖厂商屏保。
+- [ ] Kindle 客户端在设备重启后自动启动。
+- [ ] 下载失败时保留旧画面；完成失败重试的实机验证。
 - [ ] 新 Kindle 型号只需新增 profile；共享 backend 的型号不复制客户端业务逻辑。
 
 验收：Kindle 与 CrowPanel 订阅同一 Channel，显示同一逻辑 Scene 的不同尺寸/格式 Frame。

@@ -97,6 +97,16 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(current.frame.id, first.frame.id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_next_preview_uses_pending_delivery(self) -> None:
+        pending = self.service.deliver(now=datetime(2026, 7, 15, 12, 30))
+
+        preview = self.service.preview_next_delivery(
+            now=datetime(2026, 7, 15, 12, 45)
+        )
+
+        self.assertEqual(preview.frame.id, pending.frame.id)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_random_change_is_consumed_once_then_prepares_following_panel(self) -> None:
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(

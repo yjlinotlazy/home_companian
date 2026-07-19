@@ -6,7 +6,7 @@
 
 家宠是运行在家庭服务器上的多设备显示项目。服务端持有内容、调度、排版和渲染逻辑；CrowPanel、Kindle 及未来设备是稳定、可复用的薄客户端。
 
-当前已打通 CrowPanel 的定时拉取与电子墨水屏刷新，支持文字、图片、识字、健身和数学模块；服务端也已具备 Kindle profile、PNG Frame 和通用 Frame/ACK 接口。下一阶段是接入 Kindle 客户端，并继续收紧 Application、Forge、Protocol 和 Device 的代码边界。
+当前已打通 CrowPanel 的定时拉取与电子墨水屏刷新，支持文字、图片、识字、健身和数学模块；Kindle 已完成 PNG 下载、`eips` 全刷、ACK、休眠保图和手动唤醒刷新。下一阶段继续收紧 Application、Forge、Protocol 和 Device 的代码边界。
 
 ## 架构原则
 
@@ -125,10 +125,13 @@ CrowPanel ESP-IDF 客户端已纳入本仓库：`clients/crowpanel/crowpanel-579
 - 文字条目和成品图片存储在用户指定的内容库中。
 - HTTP 服务同时提供设备画面和网页预览。
 
-当前 HTTP 接口中，只有 `/display.bin` 是兼容接口；其余是当前网页 UI 接口：
+当前 HTTP 接口中，只有 `/display.bin` 是兼容接口。网页按 Device Instance 使用以下接口：
 
 - `GET /display.bin`：返回 `application/octet-stream`，响应体必须恰好为 27,200 字节；`X-Next-Check-Seconds` 响应头告诉设备下次唤醒时间。
-- `GET /preview.png`：默认返回服务端最后一次为设备生成的完整 PNG 画面；带手动预览参数时返回临时预览。
+- `GET /v1/devices/{device_id}/preview.png`：返回该设备已确认的当前画面；无兼容当前 Frame 时返回带未确认标记的候选图；带参数时返回临时预览。
+- `GET /v1/devices/{device_id}/preview-selection`：为该设备执行随机或定时预览选择。
+- `POST /v1/devices/{device_id}/change`：把预览选择设为该设备下一屏。
+- `GET /v1/devices/{device_id}/next-refresh` 和 `next-preview.png`：返回该设备下次检查时间与实际待投递 Frame 的缩略预览。
 - `GET /`：提供简单网页预览和手动刷新入口。
 
 设备接口直接返回排版完成的 framebuffer。ESP32 不负责解析 JSON、字体排版或 PNG 解码。
@@ -145,16 +148,17 @@ CrowPanel ESP-IDF 客户端已纳入本仓库：`clients/crowpanel/crowpanel-579
 
 下载失败或响应长度错误时不清屏，保留上一次画面，并使用 30 分钟的默认值再次检查。
 
-## Kindle 6 inch Profile
+## Kindle Gen 7 Profile
 
-- Profile ID：`kindle_6_212ppi`。
-- 方向与分辨率：竖屏 758×1024。
-- 屏幕：6 inch，约 4:3，212 PPI。
+- 当前 Profile ID：`kindle_6_167ppi_landscape`；竖放仍可使用独立的 `kindle_6_167ppi`。
+- 物理 framebuffer：600×800。设备逆时针旋转 90° 横放后，Forge 使用 800×600 的逻辑画布排版。
+- 屏幕：6 inch，4:3，167 PPI；参数来自设备 `eips -i` 实测。
 - 灰度：16-level grayscale。
-- Frame：`image/png`，758×1024、8-bit grayscale 容器，像素量化到最多 16 级。
-- 当前 presentation：48px 状态栏和 758×976 的 `portrait_1` 全屏内容区。
+- Frame：`image/png`，8-bit grayscale 容器，像素量化到最多 16 级。PNG encoder 将 800×600 逻辑画布顺时针旋转成 `eips` 接收的 600×800 文件。
+- 当前 presentation：40px 横屏状态栏和 800×560 的 `landscape_4` 全屏内容区。
+- 浏览器预览显示未旋转的 800×600 逻辑画布；设备 `/next` 返回旋转后的物理 Frame。
 
-当前实例 ID 为 `kindleGen7dk`，服务端已支持 `GET /v1/devices/kindleGen7dk/next` 和显示 ACK。Kindle 设备端客户端仍需验证实际运行入口并实现下载、显示和定时检查。
+当前实例 ID 为 `kindleGen7dk`。实机自带 `curl` 和 `eips`，因此显示客户端不依赖 KOReader 的 Lua/UI；KOReader 当前只用于提供 SSH 入口。已验证 8-bit grayscale PNG 可通过 `eips -g <path> -w gc16 -f` 正确全屏显示。客户端在手动唤醒时下载、显示并 ACK，休眠时用缓存 Frame 覆盖厂商屏保；当前不设置 RTC 自动唤醒。
 
 ## 内容模型
 
@@ -310,7 +314,8 @@ panel:
 
 当前网页行为：
 
-- 网页同时提供随机预览和定时预览，不受 YAML 的当前模式限制。
+- 每个 Device Instance 有独立区块，均提供当前画面、随机预览、定时预览、“更改”、下一次刷新时间和下一帧缩略图。
+- 随机预览和定时预览不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
 - 手动预览只影响当前网页，不修改 YAML，也不改变 ESP32 的设备结果。刷新网页后恢复真实全局画面。
@@ -319,10 +324,11 @@ panel:
 - 手动更改不按时钟提前过期；即使设备延迟唤醒，也保留到下一次设备请求。消费后恢复正常选择，服务重启或模板/编排变化也会清除该更改。
 - 网页随机预览和设备随机选择使用独立状态，预览不会提前消耗或改变设备的下一个随机结果。
 - `fonts` / `font` 保存中文字体候选和当前选择；`latin_fonts` / `latin_font` 保存非中文字体候选和当前选择。网页的两个下拉菜单写回各自选择，永久影响网页和设备画面。
-- 网页显示下一次刷新时间和缩略预览。随机模式的下一条内容预先保存在服务内存中：网页只查看，设备请求时消费并生成再下一条；服务重启后清空。
-- `wall_panel` 最后一次画面继续写入 `~/.local/state/home_companian/current.png`，其他设备按设备写入 `current-<device_id>.png`。服务重启后仍可恢复；下一屏状态仍只保存在内存中。设备从未请求过画面时，默认预览返回“尚无设备画面”，绝不拿下一屏冒充当前画面。
+- 每台设备显示自己的下一次刷新时间和缩略预览。若已有待 ACK Frame，缩略图必须显示该 Frame；否则显示该设备下一次请求将消费的预生成内容。服务重启后内存状态清空。
+- `wall_panel` 最后一次画面继续写入 `~/.local/state/home_companian/current.png`，其他设备按设备写入 `current-<device_id>.png`。服务重启后仍可恢复；下一屏状态仍只保存在内存中。
+- 设备专用 `GET /v1/devices/{device_id}/preview.png` 优先返回已确认的当前 Frame。没有兼容的当前 Frame 时，为方便接入调试，返回服务端生成的候选 PNG；主页必须同时标注“设备尚未确认显示画面”，不得把它表述成设备当前状态。
 
-主页按配置列出设备。当前控制区仍服务 `default_device`，其他设备先显示各自已确认的当前画面；未来再加入设备选择器和逐设备控制。服务端不能用某台设备最后生成的 PNG 冒充另一台设备的当前画面。
+主页按配置顺序列出设备，各设备控制和投递状态互不冒充。字体选择暂时是全局设置，只显示一组控件；未来可按 Device Presentation 拆成独立字体选择。
 
 ## 页面内容
 
@@ -410,5 +416,5 @@ latin_fonts:
 ## 待确认
 
 - Wi-Fi 凭据和服务器地址目前通过 ESP-IDF 配置写入固件，后续再决定是否支持设备端配置。
-- Kindle 客户端采用浏览器页面、越狱扩展还是其他显示入口，需要在实现设备端下载和显示客户端前验证。
+- Kindle 客户端脚本的启动方式、定时唤醒和与原系统/KOReader 的生命周期协调仍需实机验证。
 - 多设备认证和首次注册方式尚未确定；协议先保留稳定的 `device_id` 边界。

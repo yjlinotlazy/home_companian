@@ -2,7 +2,7 @@
 
 家庭服务器上的多设备电子墨水显示项目。服务端负责内容、调度、排版和编码；Kindle、CrowPanel 等设备只负责取得画面、显示、上报结果和休眠。
 
-CrowPanel ESP32 链路已经可用。Kindle 的服务端 PNG 和协议已经完成，设备端客户端待接入。浏览器目前是预览和管理界面，不是独立显示设备。
+CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 全刷、ACK、休眠保图和手动唤醒刷新。浏览器目前是预览和管理界面，不是独立显示设备。
 
 高层架构和 monorepo 边界见 [ARCHITECTURE.md](ARCHITECTURE.md)，服务端与应用细节见 [DESIGN.md](DESIGN.md)，设备 HTTP 契约见 [PROTOCOL.md](PROTOCOL.md)，迭代计划见 [MILESTONE.md](MILESTONE.md)。
 
@@ -36,13 +36,13 @@ CrowPanel ESP32 链路已经可用。Kindle 的服务端 PNG 和协议已经完�
 | 设备 | 状态 | 输出 |
 | --- | --- | --- |
 | CrowPanel 5.79 inch, 792×272 | 已支持 | 27,200-byte 1-bit framebuffer |
-| Kindle 6 inch, 758×1024, 212 PPI | 服务端已支持，客户端待接入 | 16-level grayscale PNG |
+| Kindle Gen 7, 物理 600×800，横放后逻辑 800×600 | 已支持 | 16-level grayscale PNG |
 | Browser | 预览和管理端 | PNG |
 
 设备 ID 和设备型号是分开的：
 
 - `wall_panel`、`kindleGen7dk` 是用户在配置中定义的 Device Instance ID。
-- `crowpanel_579`、`kindle_6_212ppi` 是程序提供的 Device Profile。
+- `crowpanel_579`、`kindle_6_167ppi_landscape` 是当前实例使用的 Device Profile。
 - 多台相同型号设备使用不同 ID、相同 profile 即可。
 
 通用设备接口使用配置中的 ID，例如 `/v1/devices/kindleGen7dk/next`。`/display.bin` 是唯一保留的旧固件兼容口，固定服务 `wall_panel`。
@@ -50,9 +50,9 @@ CrowPanel ESP32 链路已经可用。Kindle 的服务端 PNG 和协议已经完�
 设备端源码与服务端放在同一仓库：
 
 - `clients/crowpanel/crowpanel-579/`：当前 CrowPanel ESP-IDF 客户端；部署方法见其 [README.md](clients/crowpanel/crowpanel-579/README.md)。
-- `clients/kindle/gen7dk/`：计划中的 Kindle Gen 7 客户端。
+- `clients/kindle/gen7dk/`：Kindle Gen 7 客户端；部署方法见其 [README.md](clients/kindle/gen7dk/README.md)。
 
-各客户端保留自己的工具链和局部 `.gitignore`，但共同遵守 [PROTOCOL.md](PROTOCOL.md)。CrowPanel 目前仍通过兼容接口工作；新的 Kindle 客户端将首先打通 PNG → 显示 → ACK → 休眠的通用协议链路。
+各客户端保留自己的工具链和局部 `.gitignore`，但共同遵守 [PROTOCOL.md](PROTOCOL.md)。CrowPanel 目前仍通过兼容接口工作；Kindle 使用 PNG → 显示 → ACK → 休眠的通用协议链路。
 
 ## 运行(服务器端)
 
@@ -121,7 +121,9 @@ devices:
 
 Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪个 Channel、何时刷新以及如何排版。完整示例见 [config.example.yaml](config.example.yaml)。
 
-网页可以临时随机或按时间预览，也可以把候选内容设为下一次设备刷新。临时预览不会改变设备当前画面；“更改”只影响下一屏。字体菜单来自配置中的 `fonts` 和 `latin_fonts`。
+主页为每台配置设备分别显示当前画面、随机/定时预览、“更改”、下一次刷新时间和下一帧缩略图。临时预览不会改变设备当前画面；某个设备区块中的“更改”只影响该设备的下一屏。字体菜单暂时全局共享，候选来自配置中的 `fonts` 和 `latin_fonts`。
+
+设备专用 `preview.png` 优先显示设备已 ACK 的当前画面；尚无 ACK 时仍返回服务端生成的候选图，并在主页标注“设备尚未确认显示画面”，方便接入和调试。
 
 ## 内容库
 

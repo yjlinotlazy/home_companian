@@ -36,10 +36,18 @@ class TemplateTests(unittest.TestCase):
 
     def test_loads_kindle_portrait_template(self) -> None:
         template = load_template("portrait_1")
-        self.assertEqual((template.width, template.height), (758, 976))
+        self.assertEqual((template.width, template.height), (600, 760))
         self.assertEqual(
             (template.slot(1).width, template.slot(1).height),
-            (758, 976),
+            (600, 760),
+        )
+
+    def test_loads_kindle_landscape_template(self) -> None:
+        template = load_template("landscape_4")
+        self.assertEqual((template.width, template.height), (800, 560))
+        self.assertEqual(
+            (template.slot(1).width, template.slot(1).height),
+            (800, 560),
         )
 
     def test_rejects_assignment_to_unknown_slot(self) -> None:

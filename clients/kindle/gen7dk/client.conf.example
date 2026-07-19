@@ -1,0 +1,8 @@
+SERVER_URL=https://<server-host>:<port>
+DEVICE_ID=kindleGen7dk
+CA_CERT=/mnt/us/home_companian/rootCA.pem
+INSECURE=0
+WORK_DIR=/tmp/home_companian
+WAVEFORM=gc16
+SCREEN_RESTORE_DELAY=3
+WIFI_WAIT_SECONDS=60

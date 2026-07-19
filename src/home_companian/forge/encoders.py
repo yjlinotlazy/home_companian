@@ -29,6 +29,18 @@ class PngEncoder:
             encoded = encoded.point(
                 lambda pixel: round(round(pixel * maximum / 255) * 255 / maximum)
             )
+        rotations = {
+            0: None,
+            90: Image.Transpose.ROTATE_270,
+            180: Image.Transpose.ROTATE_180,
+            270: Image.Transpose.ROTATE_90,
+        }
+        try:
+            transpose = rotations[profile.frame_rotation_degrees]
+        except KeyError as exc:
+            raise ValueError("frame rotation must be 0, 90, 180, or 270 degrees") from exc
+        if transpose is not None:
+            encoded = encoded.transpose(transpose)
         output = BytesIO()
         encoded.save(output, format="PNG")
         return output.getvalue()

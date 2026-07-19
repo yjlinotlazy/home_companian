@@ -1,11 +1,13 @@
 from datetime import datetime
+from io import BytesIO
 import unittest
 
 from PIL import Image
 
 from home_companian.devices import (
     CROWPANEL_579,
-    KINDLE_6_212PPI,
+    KINDLE_6_167PPI,
+    KINDLE_6_167PPI_LANDSCAPE,
     get_device_profile,
 )
 from home_companian.domain import PanelConfig, SlotAssignment
@@ -60,6 +62,10 @@ class ForgeTests(unittest.TestCase):
         second = Forge().encode(image, "scene-1", profile, datetime(2026, 7, 18))
 
         self.assertTrue(payload.startswith(b"\x89PNG"))
+        self.assertEqual(payload[24], 8)  # PNG IHDR bit depth
+        self.assertEqual(payload[25], 0)  # PNG IHDR grayscale color type
+        with Image.open(BytesIO(payload)) as encoded:
+            self.assertEqual(encoded.mode, "L")
         self.assertEqual(first.id, second.id)
         self.assertEqual(first.mime_type, "image/png")
 
@@ -68,10 +74,30 @@ class ForgeTests(unittest.TestCase):
             get_device_profile("missing")
 
     def test_kindle_profile_matches_hardware(self) -> None:
-        self.assertEqual((KINDLE_6_212PPI.width, KINDLE_6_212PPI.height), (758, 1024))
-        self.assertEqual(KINDLE_6_212PPI.ppi, 212)
-        self.assertEqual(KINDLE_6_212PPI.grayscale_levels, 16)
-        self.assertEqual(KINDLE_6_212PPI.mime_type, "image/png")
+        self.assertEqual((KINDLE_6_167PPI.width, KINDLE_6_167PPI.height), (600, 800))
+        self.assertEqual(KINDLE_6_167PPI.ppi, 167)
+        self.assertEqual(KINDLE_6_167PPI.grayscale_levels, 16)
+        self.assertEqual(KINDLE_6_167PPI.mime_type, "image/png")
+
+    def test_kindle_landscape_frame_is_rotated_for_physical_screen(self) -> None:
+        profile = KINDLE_6_167PPI_LANDSCAPE
+        image = Image.new("L", (profile.width, profile.height), 255)
+        image.putpixel((0, 0), 0)
+
+        payload = PngEncoder().encode(image, profile)
+
+        with Image.open(BytesIO(payload)) as encoded:
+            self.assertEqual(encoded.size, (600, 800))
+            self.assertEqual(encoded.mode, "L")
+            self.assertEqual(encoded.getpixel((599, 0)), 0)
+
+    def test_png_encoder_rejects_invalid_rotation(self) -> None:
+        profile = type(CROWPANEL_579)(
+            "invalid_rotation", 20, 10, 0, "png", "image/png",
+            frame_rotation_degrees=45,
+        )
+        with self.assertRaisesRegex(ValueError, "frame rotation"):
+            PngEncoder().encode(Image.new("L", (20, 10)), profile)
 
 
 if __name__ == "__main__":

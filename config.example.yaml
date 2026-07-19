@@ -42,7 +42,7 @@ devices:
           2: {module: items}
           3: {module: chinese, source: select}
   kindleGen7dk:
-    profile: kindle_6_212ppi
+    profile: kindle_6_167ppi_landscape
     channel: home
     refresh:
       minutes: 30
@@ -56,6 +56,6 @@ devices:
         right:
           - module: weekday
       panel:
-        template: portrait_1
+        template: landscape_4
         slots:
           1: {module: items}

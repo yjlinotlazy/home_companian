@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,10 +12,27 @@ from threading import Lock
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .config import ConfigError, FontChoice, load_config
-from .service import DisplayService
+from .devices import get_device_profile
+from .service import DisplayService, RenderedDisplay
 
 
 DISPLAY_BIN_DEVICE_ID = "wall_panel"
+
+
+@dataclass(frozen=True)
+class DevicePage:
+    id: str
+    profile_id: str
+    width: int
+    height: int
+    confirmed: bool
+
+
+def device_preview_png(rendered: RenderedDisplay) -> bytes:
+    """Return the logical display image for browser preview."""
+    output = BytesIO()
+    rendered.image.convert("L").save(output, format="PNG")
+    return output.getvalue()
 
 
 def index_html(
@@ -22,10 +40,10 @@ def index_html(
     selected_font: Path,
     latin_fonts: tuple[FontChoice, ...],
     selected_latin_font: Path,
-    devices: tuple[tuple[str, str], ...],
-    default_device: str,
+    devices: tuple[DevicePage, ...],
 ) -> bytes:
     current_time = datetime.now().strftime("%H:%M")
+
     def font_options(choices: tuple[FontChoice, ...], selected: Path | None) -> str:
         return "".join(
             f'<option value="{escape(choice.name, quote=True)}"'
@@ -36,6 +54,7 @@ def index_html(
 
     chinese_options = font_options(fonts, selected_font)
     latin_options = font_options(latin_fonts, selected_latin_font)
+
     def device_label(device_id: str, profile_id: str) -> str:
         if profile_id.startswith("crowpanel"):
             return "CrowPanel"
@@ -43,66 +62,133 @@ def index_html(
             return "Kindle"
         return device_id
 
-    configured_devices = devices
-    selected_device = default_device
-    selected_profile = next(
-        profile_id
-        for device_id, profile_id in configured_devices
-        if device_id == selected_device
-    )
-    default_label = device_label(selected_device, selected_profile)
-    secondary_sections = "".join(
-        f"""<hr class="device-divider">
-<section class="device-section">
-  <h2>{escape(device_label(device_id, profile_id))}</h2>
-  <img class="device-preview portrait-preview"
-       src="/v1/devices/{quote(device_id, safe='')}/preview.png"
-       onerror="this.hidden=true;this.nextElementSibling.hidden=false"
-       alt="{escape(device_label(device_id, profile_id))} current display">
-  <p hidden>设备尚未确认显示画面</p>
+    def render_device(device: DevicePage) -> str:
+        device_id = escape(device.id, quote=True)
+        encoded_id = quote(device.id, safe="")
+        label = escape(device_label(device.id, device.profile_id))
+        unconfirmed = " hidden" if device.confirmed else ""
+        return f"""<section class="device-section" data-device-id="{device_id}"
+         style="--device-width:{device.width}px">
+  <h2>{label} <small>{device_id}</small></h2>
+  <div class="display-layout">
+    <div class="display-main">
+      <img class="device-preview" data-current-preview
+           src="/v1/devices/{encoded_id}/preview.png"
+           width="{device.width}" height="{device.height}"
+           alt="{label} display preview">
+      <p data-unconfirmed{unconfirmed}>设备尚未确认显示画面</p>
+      <div class="controls-grid">
+        <div>随机预览 <button type="button" data-action="random-preview">换一个</button>
+        <button type="button" data-action="change" disabled>更改</button>
+        <span data-change-status></span></div>
+        <div><label>定时预览 <input type="time" data-preview-time value="{current_time}"></label>
+        <button type="button" data-action="time-preview">预览</button></div>
+      </div>
+    </div>
+    <aside class="next-refresh">
+      <span>下次刷新：<span data-next-refresh-time>加载中</span></span>
+      <img data-next-preview alt="{label} next frame preview">
+    </aside>
+  </div>
 </section>"""
-        for device_id, profile_id in configured_devices
-        if device_id != selected_device
+
+    device_sections = '<hr class="device-divider">'.join(
+        render_device(device) for device in devices
     )
-    controls = f"""<div class="controls-grid">
-<div>随机预览 <button type="button" id="random-refresh">换一个</button>
-<button type="button" id="global-change" disabled>更改</button> <span id="change-status"></span></div>
-<div><label>定时预览 <input type="time" id="preview-time" value="{current_time}"></label>
-<button type="button" id="time-preview">预览</button></div>
-<div><label>中文字体 <select id="chinese-font-select">{chinese_options}</select></label>
-<button type="button" data-font-apply="chinese">应用</button> <span id="chinese-font-status"></span></div>
-<div><label>英文字体 <select id="latin-font-select">{latin_options}</select></label>
-<button type="button" data-font-apply="latin">应用</button> <span id="latin-font-status"></span></div>
+    font_controls = f"""<section class="font-controls">
+<h2>全局字体</h2>
+<div class="controls-grid">
+  <div><label>中文字体 <select id="chinese-font-select">{chinese_options}</select></label>
+  <button type="button" data-font-apply="chinese">应用</button>
+  <span id="chinese-font-status"></span></div>
+  <div><label>英文字体 <select id="latin-font-select">{latin_options}</select></label>
+  <button type="button" data-font-apply="latin">应用</button>
+  <span id="latin-font-status"></span></div>
 </div>
+</section>"""
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Home Companian</title>
+<style>
+.display-layout {{ display:grid; grid-template-columns:minmax(0,var(--device-width)) 160px; gap:1rem; align-items:start; }}
+.display-main {{ max-width:var(--device-width); }}
+.controls-grid {{ display:grid; grid-template-columns:minmax(0,1fr); gap:.75rem; margin-top:1rem; }}
+.controls-grid > div {{ min-width:0; }}
+.next-refresh {{ display:grid; gap:.5rem; }}
+.next-refresh img {{ width:160px; height:auto; border:1px solid #aaa; }}
+.device-divider {{ margin:2.5rem 0; border:0; border-top:1px solid #999; }}
+.device-preview {{ display:block; width:100%; height:auto; border:1px solid #888; }}
+.device-section small {{ font-size:.55em; font-weight:normal; color:#555; }}
+.font-controls {{ margin-top:2.5rem; }}
+@media (max-width: 760px) {{ .display-layout {{ grid-template-columns:minmax(0,1fr); }} }}
+</style></head>
+<body style="font-family:sans-serif;margin:2rem;background:#eee">
+  <h1>Home Companian</h1>
+  {device_sections}
+  {font_controls}
 <script>
-let previewItemId = null;
-let nextRefreshTimer = null;
-async function preview(query) {{
-  const response = await fetch('/preview-selection?' + query);
+const nextRefreshTimers = new Map();
+
+function devicePath(section, action) {{
+  return '/v1/devices/' + encodeURIComponent(section.dataset.deviceId) + '/' + action;
+}}
+
+function refreshed(url) {{
+  return url + (url.includes('?') ? '&' : '?') + 'refresh=' + Date.now();
+}}
+
+async function preview(section, query) {{
+  const response = await fetch(devicePath(section, 'preview-selection') + '?' + query);
   if (!response.ok) throw new Error(await response.text());
   const selection = await response.json();
-  previewItemId = selection.item_id;
-  document.querySelector('#preview').src = selection.image_url + '&refresh=' + Date.now();
-  document.querySelector('#global-change').disabled = false;
-  document.querySelector('#change-status').textContent = '仅预览';
+  section.dataset.previewItemId = selection.item_id;
+  section.querySelector('[data-current-preview]').src = refreshed(selection.image_url);
+  section.querySelector('[data-action="change"]').disabled = false;
+  section.querySelector('[data-change-status]').textContent = '仅预览';
 }}
-document.querySelector('#random-refresh').addEventListener('click', async () => {{
-  await preview('mode=random');
-}});
-document.querySelector('#time-preview').addEventListener('click', async () => {{
-  const value = document.querySelector('#preview-time').value;
-  if (value) await preview('time=' + encodeURIComponent(value));
-}});
-document.querySelector('#global-change').addEventListener('click', async () => {{
-  if (previewItemId === null) return;
-  const response = await fetch('/change?item=' + previewItemId, {{method: 'POST'}});
+
+async function loadNextRefresh(section) {{
+  const response = await fetch(devicePath(section, 'next-refresh'));
   if (!response.ok) throw new Error(await response.text());
   const result = await response.json();
-  previewItemId = null;
-  document.querySelector('#global-change').disabled = true;
-  document.querySelector('#change-status').textContent = '已设为下次刷新';
-  loadNextRefresh();
+  const nextAt = new Date(result.next_at);
+  section.querySelector('[data-next-refresh-time]').textContent = nextAt.toLocaleString('zh-CN', {{
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  }});
+  section.querySelector('[data-next-preview]').src = refreshed(result.image_url);
+  const delay = Math.max(1000, nextAt.getTime() - Date.now() + 5000);
+  window.clearTimeout(nextRefreshTimers.get(section.dataset.deviceId));
+  nextRefreshTimers.set(
+    section.dataset.deviceId,
+    window.setTimeout(() => loadNextRefresh(section), delay)
+  );
+}}
+
+document.querySelectorAll('.device-section').forEach(section => {{
+  section.querySelector('[data-action="random-preview"]').addEventListener('click', () => {{
+    preview(section, 'mode=random');
+  }});
+  section.querySelector('[data-action="time-preview"]').addEventListener('click', () => {{
+    const value = section.querySelector('[data-preview-time]').value;
+    if (value) preview(section, 'time=' + encodeURIComponent(value));
+  }});
+  section.querySelector('[data-action="change"]').addEventListener('click', async () => {{
+    const itemId = section.dataset.previewItemId;
+    if (!itemId) return;
+    const response = await fetch(
+      devicePath(section, 'change') + '?item=' + encodeURIComponent(itemId),
+      {{method: 'POST'}}
+    );
+    if (!response.ok) throw new Error(await response.text());
+    delete section.dataset.previewItemId;
+    section.querySelector('[data-action="change"]').disabled = true;
+    section.querySelector('[data-change-status]').textContent = '已设为下次刷新';
+    loadNextRefresh(section);
+  }});
+  loadNextRefresh(section);
 }});
+
 document.querySelectorAll('[data-font-apply]').forEach(button => {{
   button.addEventListener('click', async () => {{
     const group = button.dataset.fontApply;
@@ -111,55 +197,10 @@ document.querySelectorAll('[data-font-apply]').forEach(button => {{
     const response = await fetch('/font?' + query, {{method: 'POST'}});
     if (!response.ok) throw new Error(await response.text());
     document.querySelector('#' + group + '-font-status').textContent = '已应用';
-    document.querySelector('#preview').src = '/preview.png?refresh=' + Date.now();
-    loadNextRefresh();
+    document.querySelectorAll('.device-section').forEach(loadNextRefresh);
   }});
 }});
-async function loadNextRefresh() {{
-  const response = await fetch('/next-refresh');
-  if (!response.ok) throw new Error(await response.text());
-  const result = await response.json();
-  const nextAt = new Date(result.next_at);
-  document.querySelector('#next-refresh-time').textContent = nextAt.toLocaleString('zh-CN', {{
-    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
-  }});
-  document.querySelector('#next-preview').src = result.image_url + '?refresh=' + Date.now();
-  const delay = Math.max(1000, nextAt.getTime() - Date.now() + 5000);
-  window.clearTimeout(nextRefreshTimer);
-  nextRefreshTimer = window.setTimeout(loadNextRefresh, delay);
-}}
-window.addEventListener('DOMContentLoaded', loadNextRefresh);
-</script>"""
-
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Home Companian</title>
-<style>
-.display-layout {{ display:grid; grid-template-columns:minmax(0,792px) 160px; gap:1rem; align-items:start; }}
-.main-preview {{ width:100%; height:auto; border:1px solid #888; }}
-.controls-grid {{ display:grid; grid-template-columns:minmax(0,1fr); gap:.75rem; margin-top:1rem; }}
-.controls-grid > div {{ min-width:0; }}
-.next-refresh {{ display:grid; gap:.5rem; }}
-.next-refresh img {{ width:160px; height:auto; border:1px solid #aaa; }}
-.device-divider {{ margin:2.5rem 0; border:0; border-top:1px solid #999; }}
-.device-preview {{ display:block; width:100%; height:auto; border:1px solid #888; }}
-.portrait-preview {{ max-width:758px; }}
-@media (max-width: 760px) {{ .display-layout {{ grid-template-columns:minmax(0,1fr); }} }}
-</style></head>
-<body style="font-family:sans-serif;margin:2rem;background:#eee">
-  <h1>Home Companian</h1>
-  <h2>{escape(default_label)}</h2>
-  <div class="display-layout">
-    <div>
-      <img class="main-preview" id="preview" src="/preview.png" width="792" height="272" alt="e-paper preview">
-      {controls}
-    </div>
-    <aside class="next-refresh">
-      <span>下次刷新：<span id="next-refresh-time">加载中</span></span>
-      <img id="next-preview" alt="next e-paper preview">
-    </aside>
-  </div>
-  {secondary_sections}
+</script>
 </body>
 </html>
 """.encode("utf-8")
@@ -236,22 +277,91 @@ def make_handler(
             request = urlparse(self.path)
             try:
                 preview_device_id = parse_device_route(request.path, "preview.png")
-                device_id = parse_device_route(request.path, "next")
+                selection_device_id = parse_device_route(
+                    request.path, "preview-selection"
+                )
+                next_refresh_device_id = parse_device_route(
+                    request.path, "next-refresh"
+                )
+                next_preview_device_id = parse_device_route(
+                    request.path, "next-preview.png"
+                )
+                next_device_id = parse_device_route(request.path, "next")
                 if preview_device_id is not None:
                     device_service = device_services.get(preview_device_id)
-                    rendered = device_service.render_current()
-                    if rendered is None:
-                        self._send(
-                            HTTPStatus.NOT_FOUND,
-                            "text/plain; charset=utf-8",
-                            "设备尚未确认显示画面\n".encode(),
+                    preview_time = parse_preview_time(request.query)
+                    preview_random = is_random_preview(request.query)
+                    preview_item_id = parse_item_id(request.query)
+                    temporary = (
+                        preview_time is not None
+                        or preview_random
+                        or preview_item_id is not None
+                    )
+                    if temporary:
+                        rendered = device_service.render(
+                            preview_time=preview_time,
+                            preview_random=preview_random,
+                            preview_item_id=preview_item_id,
                         )
-                        return
-                    output = BytesIO()
-                    rendered.image.save(output, format="PNG")
-                    self._send(HTTPStatus.OK, "image/png", output.getvalue())
-                elif device_id is not None:
-                    device_service = device_services.get(device_id)
+                        confirmed = False
+                    else:
+                        rendered = device_service.render_current()
+                        confirmed = rendered is not None
+                        if rendered is None:
+                            rendered = device_service.preview_next_delivery()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                        {"X-Display-Confirmed": "true" if confirmed else "false"},
+                    )
+                elif selection_device_id is not None:
+                    device_service = device_services.get(selection_device_id)
+                    preview_time = parse_preview_time(request.query)
+                    rendered = device_service.render(
+                        preview_time=preview_time,
+                        preview_random=is_random_preview(request.query),
+                    )
+                    image_query = {"item": rendered.item_id}
+                    if preview_time is not None:
+                        image_query["time"] = preview_time.strftime("%H:%M")
+                    encoded_id = quote(selection_device_id, safe="")
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "item_id": rendered.item_id,
+                            "image_url": (
+                                f"/v1/devices/{encoded_id}/preview.png?"
+                                f"{urlencode(image_query)}"
+                            ),
+                        },
+                    )
+                elif next_refresh_device_id is not None:
+                    device_service = device_services.get(next_refresh_device_id)
+                    now = datetime.now()
+                    rendered = device_service.preview_next_delivery(now)
+                    encoded_id = quote(next_refresh_device_id, safe="")
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "next_at": device_service.next_check_at(now).isoformat(),
+                            "item_id": rendered.item_id,
+                            "image_url": (
+                                f"/v1/devices/{encoded_id}/next-preview.png"
+                            ),
+                        },
+                    )
+                elif next_preview_device_id is not None:
+                    rendered = device_services.get(
+                        next_preview_device_id
+                    ).preview_next_delivery()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                    )
+                elif next_device_id is not None:
+                    device_service = device_services.get(next_device_id)
                     rendered = device_service.deliver()
                     self._send(
                         HTTPStatus.OK,
@@ -279,66 +389,22 @@ def make_handler(
                             settings.latin_fonts,
                             settings.latin_font,
                             tuple(
-                                (device.id, device.profile)
+                                DevicePage(
+                                    id=device.id,
+                                    profile_id=device.profile,
+                                    width=get_device_profile(device.profile).width,
+                                    height=get_device_profile(device.profile).height,
+                                    confirmed=(
+                                        device_services.get(
+                                            device.id
+                                        ).render_current()
+                                        is not None
+                                    ),
+                                )
                                 for device in config.devices
                             ),
-                            config.default_device,
                         ),
                     )
-                elif request.path == "/preview.png":
-                    preview_time = parse_preview_time(request.query)
-                    preview_random = is_random_preview(request.query)
-                    preview_item_id = parse_item_id(request.query)
-                    if preview_time is not None or preview_random or preview_item_id is not None:
-                        rendered = service.render(
-                            preview_time=preview_time,
-                            preview_random=preview_random,
-                            preview_item_id=preview_item_id,
-                        )
-                    else:
-                        rendered = service.render_current()
-                        if rendered is None:
-                            self._send(
-                                HTTPStatus.NOT_FOUND,
-                                "text/plain; charset=utf-8",
-                                "设备尚未请求过画面\n".encode(),
-                            )
-                            return
-                    output = BytesIO()
-                    rendered.image.save(output, format="PNG")
-                    self._send(HTTPStatus.OK, "image/png", output.getvalue())
-                elif request.path == "/preview-selection":
-                    preview_time = parse_preview_time(request.query)
-                    rendered = service.render(
-                        preview_time=preview_time,
-                        preview_random=is_random_preview(request.query),
-                    )
-                    image_query = {"item": rendered.item_id}
-                    if preview_time is not None:
-                        image_query["time"] = preview_time.strftime("%H:%M")
-                    self._send_json(
-                        HTTPStatus.OK,
-                        {
-                            "item_id": rendered.item_id,
-                            "image_url": f"/preview.png?{urlencode(image_query)}",
-                        },
-                    )
-                elif request.path == "/next-refresh":
-                    now = datetime.now()
-                    rendered = service.render_next(now)
-                    self._send_json(
-                        HTTPStatus.OK,
-                        {
-                            "next_at": service.next_check_at(now).isoformat(),
-                            "item_id": rendered.item_id,
-                            "image_url": "/next-preview.png",
-                        },
-                    )
-                elif request.path == "/next-preview.png":
-                    rendered = service.render_next()
-                    output = BytesIO()
-                    rendered.image.save(output, format="PNG")
-                    self._send(HTTPStatus.OK, "image/png", output.getvalue())
                 elif request.path == "/display.bin":
                     crowpanel_service = device_services.get(DISPLAY_BIN_DEVICE_ID)
                     rendered = crowpanel_service.render(device=True)
@@ -364,8 +430,9 @@ def make_handler(
         def do_POST(self) -> None:
             request = urlparse(self.path)
             try:
-                device_id = parse_device_route(request.path, "ack")
-                if device_id is not None:
+                ack_device_id = parse_device_route(request.path, "ack")
+                change_device_id = parse_device_route(request.path, "change")
+                if ack_device_id is not None:
                     body = self._read_json()
                     frame_id = body.get("frame_id")
                     status = body.get("status")
@@ -373,13 +440,13 @@ def make_handler(
                         raise ValueError("frame_id must be provided")
                     if not isinstance(status, str):
                         raise ValueError("ack status must be provided")
-                    device_services.get(device_id).acknowledge(frame_id, status)
+                    device_services.get(ack_device_id).acknowledge(frame_id, status)
                     self._send_json(HTTPStatus.OK, {"frame_id": frame_id, "status": status})
-                elif request.path == "/change":
+                elif change_device_id is not None:
                     item_id = parse_item_id(request.query)
                     if item_id is None:
                         raise ValueError("item must be provided")
-                    next_at = service.change(item_id)
+                    next_at = device_services.get(change_device_id).change(item_id)
                     self._send_json(
                         HTTPStatus.OK,
                         {"item_id": item_id, "next_at": next_at.isoformat()},

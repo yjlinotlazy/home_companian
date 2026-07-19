@@ -14,6 +14,7 @@ class DeviceProfile:
     capabilities: tuple[str, ...] = ()
     ppi: int | None = None
     grayscale_levels: int = 2
+    frame_rotation_degrees: int = 0
 
     @property
     def content_height(self) -> int:
@@ -30,22 +31,36 @@ CROWPANEL_579 = DeviceProfile(
     capabilities=("monochrome", "deep_sleep"),
 )
 
-KINDLE_6_212PPI = DeviceProfile(
-    id="kindle_6_212ppi",
-    width=758,
-    height=1024,
-    status_bar_height=48,
+KINDLE_6_167PPI = DeviceProfile(
+    id="kindle_6_167ppi",
+    width=600,
+    height=800,
+    status_bar_height=40,
     encoder="png",
     mime_type="image/png",
     capabilities=("grayscale", "portrait", "touch"),
-    ppi=212,
+    ppi=167,
     grayscale_levels=16,
+)
+
+KINDLE_6_167PPI_LANDSCAPE = DeviceProfile(
+    id="kindle_6_167ppi_landscape",
+    width=800,
+    height=600,
+    status_bar_height=40,
+    encoder="png",
+    mime_type="image/png",
+    capabilities=("grayscale", "landscape", "touch"),
+    ppi=167,
+    grayscale_levels=16,
+    frame_rotation_degrees=90,
 )
 
 
 _PROFILES = {
     CROWPANEL_579.id: CROWPANEL_579,
-    KINDLE_6_212PPI.id: KINDLE_6_212PPI,
+    KINDLE_6_167PPI.id: KINDLE_6_167PPI,
+    KINDLE_6_167PPI_LANDSCAPE.id: KINDLE_6_167PPI_LANDSCAPE,
 }
 
 

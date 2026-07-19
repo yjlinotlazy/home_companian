@@ -125,7 +125,7 @@ home_companian/
 │   ├── crowpanel/
 │   │   └── crowpanel-579/           # ESP-IDF client
 │   └── kindle/
-│       └── gen7dk/                  # planned Kindle client
+│       └── gen7dk/                  # Kindle curl/eips client in progress
 ├── tests/                           # server and protocol tests
 ├── PROTOCOL.md                      # shared wire contract
 ├── ARCHITECTURE.md                  # this decision

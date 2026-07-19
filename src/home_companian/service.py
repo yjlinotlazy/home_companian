@@ -249,6 +249,13 @@ class DisplayService:
             scene = self._scene_for_item(settings, item, next_at)
         return self._render_scene(scene, settings, next_at)
 
+    def preview_next_delivery(self, now: datetime | None = None) -> RenderedDisplay:
+        """Preview the pending delivery, or the scene the next GET would consume."""
+        with self._delivery_lock:
+            if self._pending_display is not None:
+                return self._pending_display
+            return self.render_next(now)
+
     def _render_scene(
         self,
         scene: Scene,
