@@ -14,7 +14,10 @@ menu "CrowPanel network configuration"
         default 10
 
     config CROWPANEL_SERVER_URL
-        string "Framebuffer server URL"
+        string "Device-specific framebuffer URL"
         default ""
+        help
+            Full device endpoint ending in /next, for example:
+            https://<local-ip>:8003/v1/devices/wall_panel/next
 
 endmenu

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from PIL import Image
 import yaml
 
+from home_companian.checklists import ChecklistStore
 from home_companian.service import DisplayService
 
 
@@ -98,6 +99,34 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(current.frame.id, first.frame.id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_manual_refresh_replaces_pending_delivery_with_checklist_state(self) -> None:
+        root = self.config_path.parent
+        (root / "checklists.csv").write_text(
+            "id,type,text\n1,personal,EAT\n",
+            encoding="utf-8",
+        )
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        raw["checklists"] = {"daily": [1]}
+        raw["channels"]["home"]["mode"] = "random"
+        raw["devices"]["wall"]["presentation"]["panel"]["slots"] = {
+            1: {"module": "checklist", "group": "daily"}
+        }
+        self.config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        now = datetime(2026, 7, 21, 10, 0)
+        before = self.service.deliver(now)
+
+        self.service.set_checklist_completed(1, True, now)
+        refreshed = self.service.refresh_delivery(now)
+        delivered = self.service.deliver(now)
+
+        self.assertNotEqual(before.frame.id, refreshed.frame.id)
+        self.assertNotEqual(before.image.tobytes(), refreshed.image.tobytes())
+        self.assertEqual(delivered.frame.id, refreshed.frame.id)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_next_preview_uses_pending_delivery(self) -> None:
         pending = self.service.deliver(now=datetime(2026, 7, 15, 12, 30))
 
@@ -159,6 +188,33 @@ class DisplayServiceTests(unittest.TestCase):
             9 * 60 * 60,
         )
 
+    def test_variable_daily_refresh_schedule_includes_final_boundary(self) -> None:
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        raw["devices"]["wall"]["refresh"] = {
+            "schedule": [
+                {"start": "08:00", "end": "12:00", "minutes": 30},
+                {"start": "12:00", "end": "18:00", "minutes": 90},
+                {"start": "18:00", "end": "20:00", "minutes": 30},
+            ]
+        }
+        self.config_path.write_text(
+            yaml.safe_dump(raw, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        cases = (
+            (datetime(2026, 7, 21, 7, 30), datetime(2026, 7, 21, 8, 0)),
+            (datetime(2026, 7, 21, 8, 0), datetime(2026, 7, 21, 8, 30)),
+            (datetime(2026, 7, 21, 11, 30), datetime(2026, 7, 21, 12, 0)),
+            (datetime(2026, 7, 21, 12, 0), datetime(2026, 7, 21, 13, 30)),
+            (datetime(2026, 7, 21, 15, 0), datetime(2026, 7, 21, 16, 30)),
+            (datetime(2026, 7, 21, 19, 30), datetime(2026, 7, 21, 20, 0)),
+            (datetime(2026, 7, 21, 20, 0), datetime(2026, 7, 22, 8, 0)),
+        )
+        for now, expected in cases:
+            with self.subTest(now=now):
+                self.assertEqual(self.service.next_check_at(now), expected)
+
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_preview_random_does_not_advance_device_random_state(self) -> None:
         self.config_path.write_text(
@@ -191,6 +247,41 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(first_preview.item_id, repeated_preview.item_id)
         self.assertEqual(device.item_id, first_preview.item_id)
         self.assertNotEqual(following_preview.item_id, first_preview.item_id)
+
+    def test_first_random_scene_of_new_day_discards_yesterdays_checklist(self) -> None:
+        root = self.config_path.parent
+        (root / "checklists.csv").write_text(
+            "id,type,text\n1,personal,EAT\n",
+            encoding="utf-8",
+        )
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        raw["checklists"] = {"daily": [1]}
+        raw["channels"]["home"]["mode"] = "random"
+        raw["devices"]["wall"]["presentation"]["panel"]["slots"] = {
+            1: {"module": "checklist", "group": "daily"}
+        }
+        self.config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        ChecklistStore(root).set_completed(
+            1,
+            True,
+            datetime(2026, 7, 20, 20, 0),
+        )
+
+        yesterday = self.service._peek_next_scene(
+            self.service.settings(),
+            datetime(2026, 7, 20, 20, 30),
+        )
+        today = self.service._consume_next_scene(
+            self.service.settings(),
+            datetime(2026, 7, 21, 7, 0),
+        )
+
+        self.assertIn('"completed":[1]', yesterday.scene.fragments[0].content_id)
+        self.assertIn('"date":"2026-07-21"', today.scene.fragments[0].content_id)
+        self.assertIn('"completed":[]', today.scene.fragments[0].content_id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_random_scene_selects_panel_and_modules_together(self) -> None:

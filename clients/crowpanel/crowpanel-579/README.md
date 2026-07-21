@@ -1,6 +1,6 @@
 # CrowPanel 5.79 英寸客户端
 
-这是用于 792×272 CrowPanel 电子墨水屏的 ESP-IDF 客户端。它连接 Wi-Fi，从 `/display.bin` 下载 `wall_panel` 的 framebuffer，刷新屏幕，然后按照服务端返回的时间休眠。
+这是用于 792×272 CrowPanel 电子墨水屏的 ESP-IDF 客户端。它连接 Wi-Fi，从设备专属 `/v1/devices/<id>/next` 下载 framebuffer，刷新屏幕，确认该帧已显示，然后按照服务端返回的时间休眠。
 
 它是薄客户端。内容选择、排版、渲染和刷新策略都由 Home Companian 服务端负责。
 
@@ -37,7 +37,7 @@ idf.py menuconfig
 - `Wi-Fi SSID`
 - `Wi-Fi password`
 - `Maximum connection retries`
-- `Framebuffer server URL`，例如 `https://<server-ip>:8003/display.bin`
+- `Device-specific framebuffer URL`，例如 `https://<server-ip>:8003/v1/devices/wall_panel/next`
 
 使用 HTTPS 时，用签发服务端证书的公开根 CA 替换 `main/rootCA.pem`。使用 mkcert 时可通过下面的命令找到 CA 目录：
 
@@ -80,7 +80,8 @@ idf.py -p /dev/ttyACM0 flash monitor
 1. 连接 Wi-Fi；
 2. 下载恰好 27,200 字节的 framebuffer；
 3. 刷新屏幕；
-4. 读取 `X-Next-Check-Seconds`；
-5. 深睡到下一次检查时间。
+4. 向 `/v1/devices/wall_panel/ack` 确认该帧已显示；
+5. 读取 `X-Next-Check-Seconds`；
+6. 深睡到下一次检查时间。
 
 如果 Wi-Fi 连接或下载失败，设备会保留电子墨水屏上的原画面，并在 30 分钟后重试。刷写固件时必须连接 USB；正常运行时不需要 USB，可以使用兼容电池供电。

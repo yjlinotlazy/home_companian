@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
+from hashlib import sha256
 from pathlib import Path
+import random
 from typing import Any
 
 import yaml
@@ -47,10 +49,18 @@ class ChannelConfig:
 
 
 @dataclass(frozen=True)
+class RefreshPeriod:
+    start: time
+    end: time
+    minutes: int
+
+
+@dataclass(frozen=True)
 class RefreshConfig:
     minutes: int
     active_start: time
     active_end: time
+    periods: tuple[RefreshPeriod, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +75,16 @@ class RewardConfig:
 class ChecklistGroup:
     id: str
     item_ids: tuple[int, ...]
+    daily_limit: int | None = None
+
+    def item_ids_for(self, day: date) -> tuple[int, ...]:
+        if self.daily_limit is None:
+            return self.item_ids
+        seed = int.from_bytes(
+            sha256(f"{self.id}:{day.isoformat()}".encode("utf-8")).digest()
+        )
+        selected = set(random.Random(seed).sample(self.item_ids, self.daily_limit))
+        return tuple(item_id for item_id in self.item_ids if item_id in selected)
 
 
 DEFAULT_REWARD = RewardConfig("toy", "玩具", 50, 25)
@@ -110,6 +130,7 @@ class Settings:
     random_items: tuple[int, ...]
     panels: tuple[PanelConfig, ...]
     status_bar: StatusBarConfig
+    refresh_periods: tuple[RefreshPeriod, ...] = ()
     reward: RewardConfig = DEFAULT_REWARD
     checklist_groups: tuple[ChecklistGroup, ...] = ()
 
@@ -167,6 +188,7 @@ class Config:
             random_items=channel.random_items,
             panels=device.presentation.panels,
             status_bar=device.presentation.status_bar,
+            refresh_periods=device.refresh.periods,
             reward=self.reward,
             checklist_groups=self.checklist_groups,
         )
@@ -261,10 +283,21 @@ def _load_checklist_groups(root: dict[str, Any]) -> tuple[ChecklistGroup, ...]:
     groups = _mapping(raw_groups, "checklists")
     configured: list[ChecklistGroup] = []
     assigned_ids: set[int] = set()
-    for raw_group_id, raw_item_ids in groups.items():
+    for raw_group_id, raw_group in groups.items():
         if not isinstance(raw_group_id, str) or not raw_group_id.strip():
             raise ConfigError("checklist ids must be non-empty text")
         group_id = raw_group_id.strip()
+        daily_limit = None
+        if isinstance(raw_group, dict):
+            extra_keys = set(raw_group) - {"items", "daily_limit"}
+            if extra_keys:
+                raise ConfigError(
+                    f"checklists.{group_id} has unknown key: {sorted(extra_keys)[0]}"
+                )
+            raw_item_ids = raw_group.get("items")
+            daily_limit = raw_group.get("daily_limit")
+        else:
+            raw_item_ids = raw_group
         if not isinstance(raw_item_ids, list) or not raw_item_ids:
             raise ConfigError(f"checklists.{group_id} must be a non-empty list")
         if not all(type(item_id) is int and item_id > 0 for item_id in raw_item_ids):
@@ -273,13 +306,22 @@ def _load_checklist_groups(root: dict[str, Any]) -> tuple[ChecklistGroup, ...]:
             )
         if len(set(raw_item_ids)) != len(raw_item_ids):
             raise ConfigError(f"checklists.{group_id} must not contain duplicate ids")
+        if daily_limit is not None and (
+            type(daily_limit) is not int
+            or not 1 <= daily_limit <= len(raw_item_ids)
+        ):
+            raise ConfigError(
+                f"checklists.{group_id}.daily_limit must be between 1 and item count"
+            )
         duplicate = assigned_ids.intersection(raw_item_ids)
         if duplicate:
             raise ConfigError(
                 f"checklist item {min(duplicate)} is assigned to multiple checklists"
             )
         assigned_ids.update(raw_item_ids)
-        configured.append(ChecklistGroup(group_id, tuple(raw_item_ids)))
+        configured.append(
+            ChecklistGroup(group_id, tuple(raw_item_ids), daily_limit)
+        )
     return tuple(configured)
 
 
@@ -478,23 +520,60 @@ def _load_device(
         raise ConfigError(f"device {device_id} references unknown channel: {channel}")
 
     refresh = _mapping(device.get("refresh"), f"devices.{device_id}.refresh")
-    minutes = refresh.get("minutes")
-    if not isinstance(minutes, int) or minutes <= 0:
-        raise ConfigError(f"devices.{device_id}.refresh.minutes must be positive")
-    active_start = _config_time(
-        refresh.get("active_start"),
-        f"devices.{device_id}.refresh.active_start",
-        "07:00",
-    )
-    active_end = _config_time(
-        refresh.get("active_end"),
-        f"devices.{device_id}.refresh.active_end",
-        "22:00",
-    )
-    if active_start >= active_end:
-        raise ConfigError(
-            f"devices.{device_id}.refresh.active_start must be earlier than active_end"
+    raw_periods = refresh.get("schedule")
+    periods: tuple[RefreshPeriod, ...] = ()
+    if raw_periods is None:
+        minutes = refresh.get("minutes")
+        if not isinstance(minutes, int) or minutes <= 0:
+            raise ConfigError(f"devices.{device_id}.refresh.minutes must be positive")
+        active_start = _config_time(
+            refresh.get("active_start"),
+            f"devices.{device_id}.refresh.active_start",
+            "07:00",
         )
+        active_end = _config_time(
+            refresh.get("active_end"),
+            f"devices.{device_id}.refresh.active_end",
+            "22:00",
+        )
+        if active_start >= active_end:
+            raise ConfigError(
+                f"devices.{device_id}.refresh.active_start must be earlier than active_end"
+            )
+    else:
+        if any(key in refresh for key in ("minutes", "active_start", "active_end")):
+            raise ConfigError(
+                f"devices.{device_id}.refresh.schedule cannot be mixed with legacy fields"
+            )
+        if not isinstance(raw_periods, list) or not raw_periods:
+            raise ConfigError(
+                f"devices.{device_id}.refresh.schedule must be a non-empty list"
+            )
+        loaded_periods: list[RefreshPeriod] = []
+        for index, raw_period in enumerate(raw_periods):
+            label = f"devices.{device_id}.refresh.schedule[{index}]"
+            period = _mapping(raw_period, label)
+            start = _config_time(period.get("start"), f"{label}.start", "")
+            end = _config_time(period.get("end"), f"{label}.end", "")
+            period_minutes = period.get("minutes")
+            if not isinstance(period_minutes, int) or period_minutes <= 0:
+                raise ConfigError(f"{label}.minutes must be positive")
+            duration_minutes = (
+                datetime.combine(date.min, end) - datetime.combine(date.min, start)
+            ).total_seconds() // 60
+            if start >= end or duration_minutes % period_minutes != 0:
+                raise ConfigError(
+                    f"{label} must have start before end and divide evenly into minutes"
+                )
+            if loaded_periods and loaded_periods[-1].end != start:
+                raise ConfigError(
+                    f"{label}.start must equal the previous period end"
+                )
+            loaded_periods.append(RefreshPeriod(start, end, period_minutes))
+        periods = tuple(loaded_periods)
+        minutes = periods[0].minutes
+        active_start = periods[0].start
+        active_end = periods[-1].end
 
     presentation = _mapping(
         device.get("presentation"),
@@ -513,7 +592,7 @@ def _load_device(
         id=device_id,
         profile=profile,
         channel=channel,
-        refresh=RefreshConfig(minutes, active_start, active_end),
+        refresh=RefreshConfig(minutes, active_start, active_end, periods),
         presentation=PresentationConfig(
             panels=panels,
             status_bar=_load_status_bar(presentation),

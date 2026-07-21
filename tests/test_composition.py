@@ -13,7 +13,7 @@ class KindleDecorationTests(unittest.TestCase):
         with TemporaryDirectory() as temporary_dir:
             decoration_dir = Path(temporary_dir) / "decorations"
             decoration_dir.mkdir()
-            for filename in ("rainbow.png", "heart.png"):
+            for filename in ("rainbow.png", "heart_completed.png"):
                 source = Image.new("L", (100, 100), 255)
                 ImageDraw.Draw(source).rectangle((10, 10, 90, 90), fill=0)
                 source.save(decoration_dir / filename)

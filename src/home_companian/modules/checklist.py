@@ -36,7 +36,8 @@ class ChecklistModule:
             raise ConfigError(
                 f"checklist group {group} references unknown item: {min(unknown_ids)}"
             )
-        group_ids = set(configured_group.item_ids)
+        selected_item_ids = configured_group.item_ids_for(at.date())
+        group_ids = set(selected_item_ids)
         completed_ids = sorted(store.completed_ids(at.date()) & group_ids)
         portrait = assignment.option("portrait")
         portrait_width = 190
@@ -66,7 +67,7 @@ class ChecklistModule:
         return json.dumps(
             {
                 "group": group,
-                "item_ids": list(configured_group.item_ids),
+                "item_ids": list(selected_item_ids),
                 "date": at.date().isoformat(),
                 "completed": completed_ids,
                 "portrait": portrait,
@@ -161,37 +162,30 @@ class ChecklistModule:
 
         box_size = max(18, text_size - 3)
         line_height = max(box_size + 12, text_size + 12)
+        icons = {
+            False: self._checklist_icon(settings.library_dir, "heart.png", box_size),
+            True: self._checklist_icon(
+                settings.library_dir,
+                "heart_completed.png",
+                box_size,
+            ),
+        }
         y = 64
         for item in items:
             if y + line_height > content_height:
                 break
             box_y = y + (line_height - box_size) // 2
-            draw.rectangle(
-                (22, box_y, 22 + box_size, box_y + box_size),
-                outline=0,
-                width=3,
-            )
-            if item.id in completed_ids:
-                inset = 5
-                draw.line(
-                    (
-                        22 + inset,
-                        box_y + box_size // 2,
-                        22 + box_size // 2,
-                        box_y + box_size - inset,
-                    ),
-                    fill=0,
-                    width=3,
-                )
-                draw.line(
-                    (
-                        22 + box_size // 2,
-                        box_y + box_size - inset,
-                        22 + box_size - inset,
-                        box_y + inset,
-                    ),
-                    fill=0,
-                    width=3,
+            completed = item.id in completed_ids
+            icon = icons[completed]
+            if icon is not None:
+                image.paste(icon, (22, box_y))
+            else:
+                self._draw_fallback_checkbox(
+                    draw,
+                    22,
+                    box_y,
+                    box_size,
+                    completed,
                 )
             self._draw_mixed_text(
                 draw,
@@ -225,6 +219,55 @@ class ChecklistModule:
                     fill=0,
                 )
         return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")
+
+    @staticmethod
+    def _checklist_icon(
+        library_dir: Path,
+        filename: str,
+        size: int,
+    ) -> Image.Image | None:
+        try:
+            with Image.open(library_dir / "decorations" / filename) as source:
+                return ImageOps.fit(
+                    source.convert("L"),
+                    (size, size),
+                    Image.Resampling.LANCZOS,
+                )
+        except OSError:
+            return None
+
+    @staticmethod
+    def _draw_fallback_checkbox(
+        draw: ImageDraw.ImageDraw,
+        x: int,
+        y: int,
+        size: int,
+        completed: bool,
+    ) -> None:
+        draw.rectangle((x, y, x + size, y + size), outline=0, width=3)
+        if not completed:
+            return
+        inset = 5
+        draw.line(
+            (
+                x + inset,
+                y + size // 2,
+                x + size // 2,
+                y + size - inset,
+            ),
+            fill=0,
+            width=3,
+        )
+        draw.line(
+            (
+                x + size // 2,
+                y + size - inset,
+                x + size - inset,
+                y + inset,
+            ),
+            fill=0,
+            width=3,
+        )
 
     @staticmethod
     def _portrait_path(library_dir: Path, content_id: str) -> Path:

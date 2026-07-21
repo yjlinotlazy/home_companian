@@ -1,3 +1,4 @@
+from datetime import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -89,6 +90,36 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(configured.active_start.hour, 8)
         self.assertEqual(configured.panel.template, "landscape_2")
 
+    def test_loads_daily_variable_refresh_schedule(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            content = device_sections().replace(
+                "      minutes: 60\n"
+                "      active_start: '07:00'\n"
+                "      active_end: '22:00'\n",
+                "      schedule:\n"
+                "        - {start: '08:00', end: '12:00', minutes: 30}\n"
+                "        - {start: '12:00', end: '18:00', minutes: 90}\n"
+                "        - {start: '18:00', end: '20:00', minutes: 30}\n",
+            )
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n" + content,
+                encoding="utf-8",
+            )
+
+            configured = resolved_settings(path)
+
+        self.assertEqual(configured.active_start, time(8, 0))
+        self.assertEqual(configured.active_end, time(20, 0))
+        self.assertEqual(
+            [period.minutes for period in configured.refresh_periods],
+            [30, 90, 30],
+        )
+
     def test_loads_minimal_config(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -156,7 +187,9 @@ class ConfigTests(unittest.TestCase):
                 "font: /tmp/font.otf\nlibrary_dir: .\n"
                 "checklists:\n"
                 "  person_1: [3, 1, 2]\n"
-                "  family: [4]\n"
+                "  family:\n"
+                "    items: [4, 5, 6]\n"
+                "    daily_limit: 2\n"
                 + device_sections(),
                 encoding="utf-8",
             )
@@ -164,8 +197,11 @@ class ConfigTests(unittest.TestCase):
             configured = resolved_settings(path)
 
         self.assertEqual(
-            [(group.id, group.item_ids) for group in configured.checklist_groups],
-            [("person_1", (3, 1, 2)), ("family", (4,))],
+            [
+                (group.id, group.item_ids, group.daily_limit)
+                for group in configured.checklist_groups
+            ],
+            [("person_1", (3, 1, 2), None), ("family", (4, 5, 6), 2)],
         )
 
     def test_loads_status_bar_modules(self) -> None:

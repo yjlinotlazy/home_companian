@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -61,6 +62,33 @@ class ChecklistTests(unittest.TestCase):
         self.assertNotEqual(before, after)
         self.assertIn('"completed":[]', before)
         self.assertIn('"completed":[1]', after)
+
+    def test_daily_limit_selects_two_stable_items_from_the_whole_group(self) -> None:
+        group = ChecklistGroup("family", (1, 2, 3), daily_limit=2)
+        settings = SimpleNamespace(
+            library_dir=self.library,
+            checklist_groups=(group,),
+        )
+        assignment = SlotAssignment(1, "checklist", (("group", "family"),))
+        module = ChecklistModule()
+        start = date(2026, 7, 21)
+
+        selections = {
+            tuple(
+                json.loads(
+                    module.prepare(
+                        settings,
+                        datetime.combine(start + timedelta(days=offset), datetime.min.time()),
+                        assignment,
+                    )
+                )["item_ids"]
+            )
+            for offset in range(7)
+        }
+
+        self.assertTrue(all(len(selection) == 2 for selection in selections))
+        self.assertGreater(len(selections), 1)
+        self.assertEqual(group.item_ids_for(start), group.item_ids_for(start))
 
     def test_personal_and_family_tasks_record_one_and_two_points(self) -> None:
         self.store.set_completed(1, True, datetime(2026, 7, 19, 9))
@@ -130,6 +158,41 @@ class ChecklistTests(unittest.TestCase):
 
         self.assertEqual((image.size, image.mode), ((390, 270), "1"))
         self.assertEqual(image.getextrema(), (0, 255))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_module_uses_heart_images_for_checklist_state(self) -> None:
+        decorations = self.library / "decorations"
+        decorations.mkdir()
+        Image.new("L", (100, 100), 255).save(decorations / "heart.png")
+        Image.new("L", (100, 100), 0).save(
+            decorations / "heart_completed.png"
+        )
+        settings = SimpleNamespace(
+            library_dir=self.library,
+            font=Path(FONT),
+            latin_font=Path(FONT),
+            checklist_groups=(ChecklistGroup("person_1", (1,)),),
+        )
+        assignment = SlotAssignment(1, "checklist", (("group", "person_1"),))
+        module = ChecklistModule()
+        now = datetime(2026, 7, 21, 9)
+
+        before = module.render(
+            settings,
+            module.prepare(settings, now, assignment),
+            Rect(0, 0, 390, 270),
+            now,
+        )
+        self.store.set_completed(1, True, now)
+        after = module.render(
+            settings,
+            module.prepare(settings, now, assignment),
+            Rect(0, 0, 390, 270),
+            now,
+        )
+
+        self.assertEqual(before.crop((22, 71, 51, 100)).getextrema(), (255, 255))
+        self.assertEqual(after.crop((22, 71, 51, 100)).getextrema(), (0, 0))
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_portrait_replaces_group_title(self) -> None:

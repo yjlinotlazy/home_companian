@@ -30,9 +30,9 @@ devices:
     profile: crowpanel_579
     channel: home
     refresh:
-      minutes: 30
-      active_start: "07:00"
-      active_end: "22:00"
+      minutes: 60
+      active_start: "08:00"
+      active_end: "20:00"
     presentation:
       status_bar:
         left: []

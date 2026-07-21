@@ -14,6 +14,7 @@ constexpr gpio_num_t DISPLAY_POWER = GPIO_NUM_7;
 constexpr char TAG[] = "crowpanel_epd";
 constexpr uint64_t DEFAULT_NEXT_CHECK_SECONDS = 30 * 60;
 uint8_t ImageBW[EPD_W * EPD_H / 8];
+char FrameId[CROWPANEL_FRAME_ID_SIZE];
 
 void SleepUntilNextCheck(uint64_t seconds)
 {
@@ -45,7 +46,8 @@ extern "C" void app_main(void)
     }
 
     const esp_err_t download_result = DownloadDisplay(
-        ImageBW, sizeof(ImageBW), &next_check_seconds);
+        ImageBW, sizeof(ImageBW), &next_check_seconds,
+        FrameId, sizeof(FrameId));
     if (download_result != ESP_OK) {
         ESP_LOGE(TAG, "Display download failed: %s; keeping existing image",
                  esp_err_to_name(download_result));
@@ -61,5 +63,10 @@ extern "C" void app_main(void)
     EPD_DeepSleep();
 
     ESP_LOGI(TAG, "Downloaded display refreshed successfully");
+    const esp_err_t ack_result = AcknowledgeDisplay(FrameId);
+    if (ack_result != ESP_OK) {
+        ESP_LOGW(TAG, "Frame acknowledgement failed: %s",
+                 esp_err_to_name(ack_result));
+    }
     SleepUntilNextCheck(next_check_seconds);
 }

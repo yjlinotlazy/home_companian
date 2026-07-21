@@ -226,6 +226,19 @@ class DisplayService:
                 )
             return self._pending_display
 
+    def refresh_delivery(self, now: datetime | None = None) -> RenderedDisplay:
+        """Replace the pending frame so the device's next wake gets fresh state."""
+        self.refresh_prepared_checklists()
+        with self._delivery_lock:
+            rendered = self.render(
+                device=True,
+                remember_device=False,
+                now=now,
+            )
+            self._pending_display = rendered
+            self._last_ack = None
+            return rendered
+
     def acknowledge(self, frame_id: str, status: str) -> None:
         if status not in {"displayed", "failed"}:
             raise ValueError("ack status must be displayed or failed")
@@ -405,7 +418,7 @@ class DisplayService:
         items_by_id = {item.id: item for item in store.items()}
         rows: list[tuple[str, ChecklistItem, bool]] = []
         for group in settings.checklist_groups:
-            for item_id in group.item_ids:
+            for item_id in group.item_ids_for(now.date()):
                 try:
                     item = items_by_id[item_id]
                 except KeyError as exc:
@@ -484,6 +497,21 @@ class DisplayService:
 
     @staticmethod
     def _next_check_at(settings: Settings, now: datetime) -> datetime:
+        if settings.refresh_periods:
+            for period in settings.refresh_periods:
+                start = datetime.combine(now.date(), period.start)
+                end = datetime.combine(now.date(), period.end)
+                if now < start:
+                    return start
+                if now < end:
+                    interval = timedelta(minutes=period.minutes)
+                    elapsed = now - start
+                    return start + (elapsed // interval + 1) * interval
+            return datetime.combine(
+                now.date() + timedelta(days=1),
+                settings.refresh_periods[0].start,
+            )
+
         start = datetime.combine(now.date(), settings.active_start)
         end = datetime.combine(now.date(), settings.active_end)
 
@@ -520,7 +548,16 @@ class DisplayService:
         now: datetime,
     ) -> PreparedScene:
         key = self._scene_key(settings)
-        if self._next_scene is None or self._next_scene_key != key:
+        target_at = (
+            self._next_scene.scene.target_at
+            if self._next_scene is not None
+            else None
+        )
+        if (
+            self._next_scene is None
+            or self._next_scene_key != key
+            or (target_at is not None and target_at.date() < now.date())
+        ):
             next_at = self._next_check_at(settings, now)
             self._next_scene = self._prepare_scene(settings, next_at)
             self._next_scene_key = key
@@ -603,6 +640,10 @@ class DisplayService:
             settings.device_id,
             settings.channel_id,
             settings.profile_id,
+            settings.refresh_minutes,
+            settings.active_start,
+            settings.active_end,
+            settings.refresh_periods,
             settings.panels,
             settings.mode,
             settings.random_items,

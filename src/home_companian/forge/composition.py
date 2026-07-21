@@ -81,7 +81,7 @@ def _add_kindle_decorations(
                 profile.status_bar_height + profile.content_height // 2 - 67,
             ),
         ),
-        ("heart.png", (46, 46), (image.width - 58, image.height - 58)),
+        ("heart_completed.png", (46, 46), (image.width - 58, image.height - 58)),
     )
     for filename, size, position in decorations:
         try:

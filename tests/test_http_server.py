@@ -38,6 +38,10 @@ class HttpServerTests(unittest.TestCase):
             "kindleGen7dk",
         )
         self.assertEqual(parse_device_route("/v1/devices/wall/ack", "ack"), "wall")
+        self.assertEqual(
+            parse_device_route("/v1/devices/kindleGen7dk/refresh", "refresh"),
+            "kindleGen7dk",
+        )
         self.assertIsNone(parse_device_route("/display.bin", "next"))
 
     def test_parses_checklist_route(self) -> None:
@@ -137,6 +141,8 @@ class HttpServerTests(unittest.TestCase):
             page.count('<button type="button" data-action="random-preview">'), 1
         )
         self.assertEqual(page.count("<img data-next-preview"), 2)
+        self.assertEqual(page.count("data-next-refresh-time"), 2)
+        self.assertIn('data-action="refresh-rendered">手动刷新</button>', page)
 
     def test_recognizes_random_preview(self) -> None:
         self.assertTrue(is_random_preview("mode=random"))

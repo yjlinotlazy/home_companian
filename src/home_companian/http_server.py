@@ -90,6 +90,12 @@ def index_html(
         <div><label>定时预览 <input type="time" data-preview-time value="{current_time}"></label>
         <button type="button" data-action="time-preview">预览</button></div>
       </div>"""
+        if device.profile_id.startswith("kindle"):
+            refresh_controls = """<button type="button" data-action="refresh-rendered">手动刷新</button>
+      <img data-next-preview alt="Kindle rendered image preview">"""
+        else:
+            refresh_controls = f"""<span>下次刷新：<span data-next-refresh-time>加载中</span></span>
+      <img data-next-preview alt="{label} next frame preview">"""
         return f"""<section class="device-section" data-device-id="{device_id}"
          style="--device-width:{device.width}px">
   <h2>{label} <small>{device_id}</small></h2>
@@ -103,8 +109,7 @@ def index_html(
       {controls}
     </div>
     <aside class="next-refresh">
-      <span>下次刷新：<span data-next-refresh-time>加载中</span></span>
-      <img data-next-preview alt="{label} next frame preview">
+      {refresh_controls}
     </aside>
   </div>
 </section>"""
@@ -207,11 +212,13 @@ async function loadNextRefresh(section) {{
   const response = await fetch(devicePath(section, 'next-refresh'));
   if (!response.ok) throw new Error(await response.text());
   const result = await response.json();
+  section.querySelector('[data-next-preview]').src = refreshed(result.image_url);
+  const timeDisplay = section.querySelector('[data-next-refresh-time]');
+  if (!timeDisplay) return;
   const nextAt = new Date(result.next_at);
-  section.querySelector('[data-next-refresh-time]').textContent = nextAt.toLocaleString('zh-CN', {{
+  timeDisplay.textContent = nextAt.toLocaleString('zh-CN', {{
     month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
   }});
-  section.querySelector('[data-next-preview]').src = refreshed(result.image_url);
   const delay = Math.max(1000, nextAt.getTime() - Date.now() + 5000);
   window.clearTimeout(nextRefreshTimers.get(section.dataset.deviceId));
   nextRefreshTimers.set(
@@ -220,7 +227,23 @@ async function loadNextRefresh(section) {{
   );
 }}
 
+async function refreshRendered(section) {{
+  const button = section.querySelector('[data-action="refresh-rendered"]');
+  button.disabled = true;
+  try {{
+    const response = await fetch(devicePath(section, 'refresh'), {{method: 'POST'}});
+    if (!response.ok) throw new Error(await response.text());
+    await loadNextRefresh(section);
+  }} finally {{
+    button.disabled = false;
+  }}
+}}
+
 document.querySelectorAll('.device-section').forEach(section => {{
+  const refreshButton = section.querySelector('[data-action="refresh-rendered"]');
+  if (refreshButton) {{
+    refreshButton.addEventListener('click', () => refreshRendered(section));
+  }}
   const randomButton = section.querySelector('[data-action="random-preview"]');
   if (randomButton) {{
     randomButton.addEventListener('click', () => preview(section, 'mode=random'));
@@ -561,6 +584,7 @@ def make_handler(
             try:
                 ack_device_id = parse_device_route(request.path, "ack")
                 change_device_id = parse_device_route(request.path, "change")
+                refresh_device_id = parse_device_route(request.path, "refresh")
                 checklist_item_id = parse_checklist_route(request.path)
                 reward_id = parse_reward_route(request.path)
                 if ack_device_id is not None:
@@ -581,6 +605,20 @@ def make_handler(
                     self._send_json(
                         HTTPStatus.OK,
                         {"item_id": item_id, "next_at": next_at.isoformat()},
+                    )
+                elif refresh_device_id is not None:
+                    rendered = device_services.get(
+                        refresh_device_id
+                    ).refresh_delivery()
+                    encoded_id = quote(refresh_device_id, safe="")
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "frame_id": rendered.frame.id,
+                            "image_url": (
+                                f"/v1/devices/{encoded_id}/next-preview.png"
+                            ),
+                        },
                     )
                 elif checklist_item_id is not None:
                     body = self._read_json()
