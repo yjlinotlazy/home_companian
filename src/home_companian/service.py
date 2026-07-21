@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 import math
 from pathlib import Path
+import random
 from threading import Lock
 import os
 import tempfile
@@ -13,7 +14,16 @@ import yaml
 from PIL import Image
 
 from .checklists import ChecklistItem, ChecklistStore
-from .config import Config, ConfigError, DEFAULT_CONFIG_PATH, Item, Settings, load_config
+from .config import (
+    Config,
+    ConfigError,
+    DEFAULT_CONFIG_PATH,
+    Item,
+    RewardConfig,
+    Settings,
+    load_config,
+)
+from .domain import PanelConfig
 from .devices import get_device_profile
 from .forge.engine import Forge
 from .forge.models import Frame, Presentation, Scene, SceneFragment
@@ -42,6 +52,22 @@ class RenderedDisplay:
     item_id: int
     image: Image.Image
     frame: Frame
+
+
+@dataclass(frozen=True)
+class RewardStatus:
+    reward: RewardConfig
+    score: int
+
+    @property
+    def redeemable(self) -> bool:
+        return self.score >= self.reward.cost
+
+
+@dataclass(frozen=True)
+class PreparedScene:
+    scene: Scene
+    panel: PanelConfig
 
 
 class DisplayService:
@@ -90,7 +116,7 @@ class DisplayService:
         self.forge = Forge()
         self._config_write_lock = Lock()
         self._next_scene_lock = Lock()
-        self._next_scene: Scene | None = None
+        self._next_scene: PreparedScene | None = None
         self._next_scene_key: tuple[object, ...] | None = None
         self._next_scene_forced = False
         self._current_display_lock = Lock()
@@ -107,15 +133,16 @@ class DisplayService:
         selected_device = device_id or self.device_id
         settings = config.for_device(selected_device)
         profile = get_device_profile(settings.profile_id)
-        template = validate_panel(settings.panel)
-        if (template.width, template.height) != (
-            profile.width,
-            profile.content_height,
-        ):
-            raise ConfigError(
-                f"selected template must be {profile.width}x{profile.content_height} "
-                f"for profile {profile.id}"
-            )
+        for panel in settings.panels:
+            template = validate_panel(panel)
+            if (template.width, template.height) != (
+                profile.width,
+                profile.content_height,
+            ):
+                raise ConfigError(
+                    f"selected template must be {profile.width}x{profile.content_height} "
+                    f"for profile {profile.id}"
+                )
         return settings
 
     def render(
@@ -179,8 +206,8 @@ class DisplayService:
                 content_id = self.preview_items_module.prepare(settings, now, assignment)
                 item = self.preview_items_module.resolve(settings, content_id)
 
-        scene = self._scene_for_item(settings, item)
-        rendered = self._render_scene(scene, settings, display_now)
+        prepared = self._scene_for_item(settings, item)
+        rendered = self._render_scene(prepared, settings, display_now)
         if device and remember_device:
             self._remember_current(rendered)
         return rendered
@@ -246,13 +273,13 @@ class DisplayService:
         now = now or datetime.now()
         next_at = self._next_check_at(settings, now)
         if self._has_forced_scene(settings):
-            scene = self._peek_next_scene(settings, now)
+            prepared = self._peek_next_scene(settings, now)
         elif settings.mode == "random":
-            scene = self._peek_next_scene(settings, now)
+            prepared = self._peek_next_scene(settings, now)
         else:
             item = select_scheduled(settings, next_at.time())
-            scene = self._scene_for_item(settings, item, next_at)
-        return self._render_scene(scene, settings, next_at)
+            prepared = self._scene_for_item(settings, item, next_at)
+        return self._render_scene(prepared, settings, next_at)
 
     def preview_next_delivery(self, now: datetime | None = None) -> RenderedDisplay:
         """Preview the pending delivery, or the scene the next GET would consume."""
@@ -263,14 +290,15 @@ class DisplayService:
 
     def _render_scene(
         self,
-        scene: Scene,
+        prepared: PreparedScene,
         settings: Settings,
         display_now: datetime,
     ) -> RenderedDisplay:
+        scene = prepared.scene
         profile = get_device_profile(settings.profile_id)
         output = self.forge.render(
             scene,
-            Presentation.from_panel(settings.panel),
+            Presentation.from_panel(prepared.panel),
             profile,
             settings,
             display_now,
@@ -297,10 +325,11 @@ class DisplayService:
         settings: Settings,
         item: Item,
         next_at: datetime | None = None,
-    ) -> Scene:
+    ) -> PreparedScene:
         at = next_at or datetime.now()
+        panel = self._items_panel(settings)
         fragments: list[SceneFragment] = []
-        for index, assignment in enumerate(settings.panel.slots):
+        for index, assignment in enumerate(panel.slots):
             if assignment.module == ItemsModule.name:
                 content_id: int | str = item.id
             else:
@@ -314,7 +343,7 @@ class DisplayService:
                     assignment.module,
                 )
             )
-        return Scene.create(tuple(fragments), next_at)
+        return PreparedScene(Scene.create(tuple(fragments), next_at), panel)
 
     def change(self, item_id: int, now: datetime | None = None) -> datetime:
         settings = self.settings()
@@ -368,11 +397,23 @@ class DisplayService:
     def checklist_items(
         self,
         now: datetime | None = None,
-    ) -> tuple[tuple[ChecklistItem, bool], ...]:
+    ) -> tuple[tuple[str, ChecklistItem, bool], ...]:
         now = now or datetime.now()
-        store = ChecklistStore(self.settings().library_dir)
+        settings = self.settings()
+        store = ChecklistStore(settings.library_dir)
         completed_ids = store.completed_ids(now.date())
-        return tuple((item, item.id in completed_ids) for item in store.items())
+        items_by_id = {item.id: item for item in store.items()}
+        rows: list[tuple[str, ChecklistItem, bool]] = []
+        for group in settings.checklist_groups:
+            for item_id in group.item_ids:
+                try:
+                    item = items_by_id[item_id]
+                except KeyError as exc:
+                    raise ConfigError(
+                        f"checklist group {group.id} references unknown item: {item_id}"
+                    ) from exc
+                rows.append((group.id, item, item.id in completed_ids))
+        return tuple(rows)
 
     def set_checklist_completed(
         self,
@@ -386,6 +427,25 @@ class DisplayService:
             now,
         )
 
+    def reward_status(self, now: datetime | None = None) -> RewardStatus:
+        settings = self.settings()
+        score = ChecklistStore(settings.library_dir).reward_score(
+            settings.reward,
+            now,
+        )
+        return RewardStatus(settings.reward, score)
+
+    def redeem_reward(
+        self,
+        reward_id: str,
+        now: datetime | None = None,
+    ) -> RewardStatus:
+        settings = self.settings()
+        if reward_id != settings.reward.id:
+            raise ValueError(f"unknown reward: {reward_id}")
+        ChecklistStore(settings.library_dir).redeem(settings.reward, now)
+        return self.reward_status(now)
+
     def refresh_prepared_checklists(self) -> None:
         settings = self.settings()
         with self._next_scene_lock:
@@ -394,9 +454,9 @@ class DisplayService:
                 or self._next_scene_key != self._scene_key(settings)
             ):
                 return
-            at = self._next_scene.target_at or datetime.now()
-            fragments = list(self._next_scene.fragments)
-            for index, assignment in enumerate(settings.panel.slots):
+            at = self._next_scene.scene.target_at or datetime.now()
+            fragments = list(self._next_scene.scene.fragments)
+            for index, assignment in enumerate(self._next_scene.panel.slots):
                 if assignment.module != ChecklistModule.name:
                     continue
                 fragments[index] = SceneFragment(
@@ -407,7 +467,10 @@ class DisplayService:
                     ),
                     assignment.module,
                 )
-            self._next_scene = Scene.create(tuple(fragments), self._next_scene.target_at)
+            self._next_scene = PreparedScene(
+                Scene.create(tuple(fragments), self._next_scene.scene.target_at),
+                self._next_scene.panel,
+            )
 
     def next_check_seconds(self, now: datetime | None = None) -> int:
         settings = self.settings()
@@ -438,11 +501,11 @@ class DisplayService:
 
         return next_check
 
-    def _peek_next_scene(self, settings: Settings, now: datetime) -> Scene:
+    def _peek_next_scene(self, settings: Settings, now: datetime) -> PreparedScene:
         with self._next_scene_lock:
             return self._ensure_next_scene_locked(settings, now)
 
-    def _consume_next_scene(self, settings: Settings, now: datetime) -> Scene:
+    def _consume_next_scene(self, settings: Settings, now: datetime) -> PreparedScene:
         with self._next_scene_lock:
             current = self._ensure_next_scene_locked(settings, now)
             next_at = self._next_check_at(settings, now)
@@ -455,7 +518,7 @@ class DisplayService:
         self,
         settings: Settings,
         now: datetime,
-    ) -> Scene:
+    ) -> PreparedScene:
         key = self._scene_key(settings)
         if self._next_scene is None or self._next_scene_key != key:
             next_at = self._next_check_at(settings, now)
@@ -476,7 +539,7 @@ class DisplayService:
         self,
         settings: Settings,
         now: datetime,
-    ) -> Scene | None:
+    ) -> PreparedScene | None:
         with self._next_scene_lock:
             if self._next_scene_key != self._scene_key(settings):
                 self._next_scene = None
@@ -486,7 +549,7 @@ class DisplayService:
             if not self._next_scene_forced or self._next_scene is None:
                 return None
             scene = self._next_scene
-            for fragment in scene.fragments:
+            for fragment in scene.scene.fragments:
                 if (
                     fragment.module == ItemsModule.name
                     and type(fragment.content_id) is int
@@ -502,9 +565,10 @@ class DisplayService:
             self._next_scene_forced = False
             return scene
 
-    def _prepare_scene(self, settings: Settings, at: datetime) -> Scene:
+    def _prepare_scene(self, settings: Settings, at: datetime) -> PreparedScene:
+        panel = random.choice(settings.panels)
         fragments: list[SceneFragment] = []
-        for index, assignment in enumerate(settings.panel.slots):
+        for index, assignment in enumerate(panel.slots):
             module = self.device_modules.get(assignment.module)
             if module is None:
                 raise ConfigError(f"unknown module: {assignment.module}")
@@ -517,14 +581,21 @@ class DisplayService:
                     assignment.module,
                 )
             )
-        return Scene.create(tuple(fragments), at)
+        return PreparedScene(Scene.create(tuple(fragments), at), panel)
 
     @staticmethod
     def _items_assignment(settings: Settings):
-        for assignment in settings.panel.slots:
+        for assignment in DisplayService._items_panel(settings).slots:
             if assignment.module == ItemsModule.name:
                 return assignment
         raise ConfigError("selected panel has no items module")
+
+    @staticmethod
+    def _items_panel(settings: Settings) -> PanelConfig:
+        for panel in settings.panels:
+            if any(slot.module == ItemsModule.name for slot in panel.slots):
+                return panel
+        raise ConfigError("selected presentation has no items module")
 
     @staticmethod
     def _scene_key(settings: Settings) -> tuple[object, ...]:
@@ -532,7 +603,7 @@ class DisplayService:
             settings.device_id,
             settings.channel_id,
             settings.profile_id,
-            settings.panel,
+            settings.panels,
             settings.mode,
             settings.random_items,
             settings.schedule,

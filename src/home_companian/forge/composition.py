@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Mapping
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from ..config import ConfigError, Settings
 from ..devices import DeviceProfile
@@ -59,4 +60,40 @@ def compose_scene(
     for x1, y1, x2, y2 in template.lines:
         offset = profile.status_bar_height
         draw.line((x1, y1 + offset, x2, y2 + offset), fill=0, width=2)
+    _add_kindle_decorations(image, settings.library_dir, profile)
     return image
+
+
+def _add_kindle_decorations(
+    image: Image.Image,
+    library_dir: Path,
+    profile: DeviceProfile,
+) -> None:
+    if not profile.id.startswith("kindle_"):
+        return
+
+    decorations = (
+        (
+            "rainbow.png",
+            (82, 55),
+            (
+                image.width // 2 - 94,
+                profile.status_bar_height + profile.content_height // 2 - 67,
+            ),
+        ),
+        ("heart.png", (46, 46), (image.width - 58, image.height - 58)),
+    )
+    for filename, size, position in decorations:
+        try:
+            with Image.open(library_dir / "decorations" / filename) as source:
+                decoration = ImageOps.contain(
+                    source.convert("L"),
+                    size,
+                    Image.Resampling.LANCZOS,
+                )
+        except OSError:
+            continue
+
+        # Treat the drawings' white paper as transparent while preserving gray ink.
+        mask = decoration.point(lambda pixel: min(255, (255 - pixel) * 4))
+        image.paste(decoration, position, mask)

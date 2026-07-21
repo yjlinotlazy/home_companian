@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from .checklists import ChecklistItem
 from .config import ConfigError, FontChoice, load_config
 from .devices import get_device_profile
-from .service import DisplayService, RenderedDisplay
+from .service import DisplayService, RenderedDisplay, RewardStatus
 
 
 DISPLAY_BIN_DEVICE_ID = "wall_panel"
@@ -37,13 +37,24 @@ def device_preview_png(rendered: RenderedDisplay) -> bytes:
     return output.getvalue()
 
 
+def reward_payload(status: RewardStatus) -> dict[str, object]:
+    return {
+        "id": status.reward.id,
+        "name": status.reward.name,
+        "cost": status.reward.cost,
+        "score": status.score,
+        "redeemable": status.redeemable,
+    }
+
+
 def index_html(
     fonts: tuple[FontChoice, ...],
     selected_font: Path,
     latin_fonts: tuple[FontChoice, ...],
     selected_latin_font: Path,
     devices: tuple[DevicePage, ...],
-    checklist_items: tuple[tuple[ChecklistItem, bool], ...] = (),
+    checklist_items: tuple[tuple[str, ChecklistItem, bool], ...] = (),
+    reward_status: RewardStatus | None = None,
 ) -> bytes:
     current_time = datetime.now().strftime("%H:%M")
 
@@ -102,8 +113,8 @@ def index_html(
         render_device(device) for device in devices
     )
     grouped_checklists: dict[str, list[tuple[ChecklistItem, bool]]] = {}
-    for item, completed in checklist_items:
-        grouped_checklists.setdefault(item.group, []).append((item, completed))
+    for group, item, completed in checklist_items:
+        grouped_checklists.setdefault(group, []).append((item, completed))
     checklist_groups = "".join(
         f'<fieldset><legend>{escape(group)}</legend>'
         + "".join(
@@ -114,9 +125,19 @@ def index_html(
         + "</fieldset>"
         for group, items in grouped_checklists.items()
     )
+    reward_controls = ""
+    if reward_status is not None:
+        reward = reward_status.reward
+        disabled = "" if reward_status.redeemable else " disabled"
+        reward_controls = f"""<div class="reward-control" data-reward-id="{escape(reward.id, quote=True)}">
+<span>{escape(reward.name)}</span>
+<progress data-reward-progress max="{reward.cost}" value="{reward_status.score}"></progress>
+<button type="button" data-action="redeem-reward"{disabled}>兑换</button>
+</div>"""
     checklist_controls = f"""<section class="checklist-controls">
 <h2>今日清单</h2>
 <div class="checklist-grid">{checklist_groups}</div>
+{reward_controls}
 <p data-checklist-status></p>
 </section>"""
     font_controls = f"""<section class="font-controls">
@@ -149,6 +170,8 @@ def index_html(
 .checklist-grid {{ display:grid; grid-template-columns:repeat(3,minmax(140px,190px)); gap:.5rem; justify-content:start; }}
 .checklist-grid fieldset {{ display:grid; gap:.3rem; margin:0; padding:.35rem .55rem .5rem; }}
 .checklist-grid label {{ white-space:nowrap; }}
+.reward-control {{ display:grid; grid-template-columns:auto 150px auto; gap:.5rem; align-items:center; margin-top:.65rem; width:fit-content; }}
+.reward-control progress {{ width:150px; }}
 @media (max-width: 760px) {{
   .display-layout {{ grid-template-columns:minmax(0,1fr); }}
   .checklist-grid {{ grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }}
@@ -233,7 +256,30 @@ document.querySelectorAll('[data-checklist-id]').forEach(checkbox => {{
       checkbox.checked = !checkbox.checked;
       throw new Error(await response.text());
     }}
+    const result = await response.json();
+    updateReward(result.reward);
     document.querySelector('[data-checklist-status]').textContent = '已保存；Kindle 下次唤醒时更新';
+    document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+  }});
+}});
+
+function updateReward(reward) {{
+  if (!reward) return;
+  const control = document.querySelector('[data-reward-id]');
+  if (!control) return;
+  control.querySelector('[data-reward-progress]').value = reward.score;
+  control.querySelector('[data-action="redeem-reward"]').disabled = !reward.redeemable;
+}}
+
+document.querySelectorAll('[data-action="redeem-reward"]').forEach(button => {{
+  button.addEventListener('click', async () => {{
+    const control = button.closest('[data-reward-id]');
+    const rewardId = encodeURIComponent(control.dataset.rewardId);
+    const response = await fetch('/v1/rewards/' + rewardId + '/redeem', {{method: 'POST'}});
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    updateReward(result.reward);
+    document.querySelector('[data-checklist-status]').textContent = '已兑换；积分已清零';
     document.querySelectorAll('.device-section').forEach(loadNextRefresh);
   }});
 }});
@@ -307,6 +353,15 @@ def parse_checklist_route(path: str) -> int | None:
     if item_id <= 0:
         raise ValueError("checklist item id must be a positive integer")
     return item_id
+
+
+def parse_reward_route(path: str) -> str | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 4 or parts[:2] != ["v1", "rewards"] or parts[3] != "redeem":
+        return None
+    if not parts[2]:
+        raise ValueError("reward id must be provided")
+    return parts[2]
 
 
 class DeviceServices:
@@ -469,12 +524,14 @@ def make_handler(
                                     ),
                                     item_controls=any(
                                         slot.module == "items"
-                                        for slot in device.presentation.panel.slots
+                                        for panel in device.presentation.panels
+                                        for slot in panel.slots
                                     ),
                                 )
                                 for device in config.devices
                             ),
                             service.checklist_items(),
+                            service.reward_status(),
                         ),
                     )
                 elif request.path == "/display.bin":
@@ -505,6 +562,7 @@ def make_handler(
                 ack_device_id = parse_device_route(request.path, "ack")
                 change_device_id = parse_device_route(request.path, "change")
                 checklist_item_id = parse_checklist_route(request.path)
+                reward_id = parse_reward_route(request.path)
                 if ack_device_id is not None:
                     body = self._read_json()
                     frame_id = body.get("frame_id")
@@ -531,9 +589,21 @@ def make_handler(
                         raise ValueError("completed must be a boolean")
                     service.set_checklist_completed(checklist_item_id, completed)
                     device_services.refresh_prepared_checklists()
+                    status = service.reward_status()
                     self._send_json(
                         HTTPStatus.OK,
-                        {"item_id": checklist_item_id, "completed": completed},
+                        {
+                            "item_id": checklist_item_id,
+                            "completed": completed,
+                            "reward": reward_payload(status),
+                        },
+                    )
+                elif reward_id is not None:
+                    status = service.redeem_reward(reward_id)
+                    device_services.refresh_prepared_checklists()
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"reward": reward_payload(status)},
                     )
                 elif request.path == "/font":
                     group = parse_qs(request.query).get("group", [None])[0]

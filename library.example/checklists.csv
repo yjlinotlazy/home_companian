@@ -1,9 +1,9 @@
-id,group,text
-1,瓜,EAT
-2,瓜,SHOWER
-3,瓜,TOOTHBRUSH
-6,果,EAT
-7,果,SHOWER
-8,果,TOOTHBRUSH
-4,家,CLEAN UP
-5,家,READ
+id,type,text
+1,personal,EAT
+2,personal,SHOWER
+3,personal,TOOTHBRUSH
+6,personal,EAT
+7,personal,SHOWER
+8,personal,TOOTHBRUSH
+4,family_task,CLEAN UP
+5,family_task,READ

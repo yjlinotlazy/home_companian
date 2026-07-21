@@ -29,7 +29,7 @@ CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 
 - 24 点等数学小游戏。
 - 节气、星期等状态栏信息。
 
-目前支持定时和随机两种内容选择方式。每日清单在网页勾选，Kindle 下次唤醒时显示完成状态；设备本身不处理互动。任务领取和奖励系统仍是后续方向。
+目前支持定时和随机两种内容选择方式。每日清单在网页勾选，Kindle 下次唤醒时显示完成状态；设备本身不处理互动。当前已支持一项积分奖励，更复杂的任务领取仍是后续方向。
 
 ## 支持的设备
 
@@ -135,6 +135,11 @@ font: /path/to/chinese-font.ttf
 latin_font: /path/to/latin-font.ttf
 library_dir: /path/to/home_companian_library
 default_device: wall_panel
+reward: {id: toy, name: 玩具, cost: 50, initial_points: 25}
+checklists:
+  person_1: [1, 2, 3]
+  person_2: [4, 5, 6]
+  family: [7, 8]
 
 channels:
   home:
@@ -155,15 +160,18 @@ devices:
       status_bar:
         center: [{module: solar_term}]
         right: [{module: weekday}]
-      panel:
-        template: landscape_3
-        slots:
-          1: {module: images, collections: "plants,animals"}
-          2: {module: items}
-          3: {module: chinese, source: select}
+      panels:
+        - template: landscape_3
+          slots:
+            1: {module: images, collections: "plants,animals"}
+            2: {module: items}
+            3: {module: chinese, source: select}
+        - template: landscape_1
+          slots:
+            1: {module: math, type: game24}
 ```
 
-Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪个 Channel、何时刷新以及如何排版。完整示例见 [config.example.yaml](config.example.yaml)。
+Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪个 Channel、何时刷新以及如何排版。`presentation.panels` 有多个条目时，服务端把模板和对应模块作为整体随机选择；单个条目则固定使用该排版。完整示例见 [config.example.yaml](config.example.yaml)。
 
 主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧缩略图；包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 
@@ -178,6 +186,7 @@ home_companian_library/
 ├── items.csv
 ├── checklists.csv
 ├── checklist_completions.csv
+├── reward_redemptions.csv
 ├── chinese/
 │   ├── full.md
 │   └── select.md
@@ -194,15 +203,20 @@ home_companian_library/
 ```
 
 - `items.csv`：`id,type,text`。
-- `checklists.csv`：`id,group,text`；同一 `group` 的项目显示在同一个清单区块。
-- `checklist_completions.csv`：`date,item_id,completed_at`；由网页维护，不需要手写。历史不会在午夜删除，但只有当天记录会显示为已完成。
+- `checklists.csv`：`id,type,text`；`personal` 每次完成积 1 分，`family_task` 每次完成积 2 分。清单 ID、成员归属、任务顺序和任务 ID 列表只写在 `config.yaml` 的 `checklists` 中。
+- `checklist_completions.csv`：`date,item_id,points,completed_at`；由网页维护，保存每日完成和当次分值。
+- `reward_redemptions.csv`：`date,reward_id,cost,redeemed_at`；由网页兑换按钮维护。
 - `health/exercises.csv`：`id,name,dose,instruction`。
-- `math/problems.csv`：`id,type,question,answer`；答案暂不显示。
+- `math/problems.csv`：`id,type,question,answer`，保存算术和数学思维题；答案暂不显示。24 点不写入 CSV，而由服务端随机生成，只使用加、减和低阶乘法，并保证有解。
 - `chinese/full.md`：按一年级至六年级列出完整字表。
 - `chinese/select.md`：只写当前启用的汉字。
 - `images/` 和 `photos/`：供显示使用的已处理图片；集合中的 `raw/` 不参与轮换。
 
-Kindle 当前使用 `landscape_5`：`瓜`、`果`、`家` 三个清单依次占三个区域，第四个区域从 `images/` 的所有直接子目录随机选取 PNG。配置写作 `{module: images, collections: "*"}`；名为 `raw` 的目录、各集合内部的 `raw/` 和空目录都不参与轮换。网页取消当天勾选时，只删除当天对应记录；以前日期的结算保留。
+Kindle 当前使用 `landscape_5`：三个清单依次占三个区域，第四个区域从 `images/` 的所有直接子目录随机选取 PNG。清单名称、成员归属和顺序由 `config.yaml` 决定。图片配置写作 `{module: images, collections: "*"}`；名为 `raw` 的目录、各集合内部的 `raw/` 和空目录都不参与轮换。网页取消当天勾选时，只删除当天对应记录；以前日期的结算保留。
+
+清单 slot 可用 `portrait: portraits/person_1.png` 以内容库中的 PNG 头像替代文字标题；头像靠区域右侧显示，任务仍排在左侧。可选的 `portrait_width` 用于单独调整头像宽度，范围为 40–190 像素。
+
+当前奖励为“玩具”：所有成员的个人任务和家庭任务合并累计，初始赠送 25 分，50 分封顶。满分后网页启用“兑换”按钮；手动确认后写入兑换历史并直接清零，封顶期间的额外完成不会带入下一轮。Kindle 在配置了奖励的清单区域底部显示“玩具”和无数字进度条。
 
 模块、模板和各文件的详细约束见 [DESIGN.md](DESIGN.md)。
 

@@ -186,6 +186,7 @@ home_companian_library/
 ├── items.csv
 ├── checklists.csv
 ├── checklist_completions.csv
+├── reward_redemptions.csv
 ├── photos/
 │   └── family_trip.png
 └── images/
@@ -193,8 +194,9 @@ home_companian_library/
 ```
 
 - `items.csv`：个人提醒和家庭任务的统一文字数据源。
-- `checklists.csv`：每日清单定义，列固定为 `id,group,text`。
-- `checklist_completions.csv`：网页写入的每日完成结算，列固定为 `date,item_id,completed_at`。
+- `checklists.csv`：每日任务定义，列固定为 `id,type,text`。清单 ID、归属、顺序和包含的任务 ID 由 `config.yaml` 的 `checklists` 映射定义。
+- `checklist_completions.csv`：网页写入的每日完成结算，列固定为 `date,item_id,points,completed_at`；分值在完成时保存快照。
+- `reward_redemptions.csv`：兑换历史，列固定为 `date,reward_id,cost,redeemed_at`。
 - `health/exercises.csv`：徒手动作名称、次数/时长和关键提示；两帧主图位于 `health/images/<id>/`。
 - `math/problems.csv`：算术和数学思维题，答案只保存在内容库中，第一版不显示。
 - `photos/`：已处理、可直接上屏的家庭图片。
@@ -255,7 +257,7 @@ CrowPanel 当前在 07:00–22:00 之间每 30 分钟请求一次，服务端从
 - 模板由程序提供，定义 `crowpanel_579` presentation 的固定 topology。区域使用模板内部的数字编号，例如 `1`、`2`、`3`；编号不在不同模板之间表达相同语义。
 - CrowPanel 屏幕顶部固定预留 44px 状态栏。状态栏不属于内容模板；792x272 屏幕的模板内容区统一为 792x228。
 - 模块的 `prepare` 阶段选择内容并生成 Scene fragment；当前模块仍负责在 Forge 给定的矩形内绘制自己的 tile，Forge 负责整体 composition、presentation 和最终编码。长期可以继续把通用文字排版和图像处理能力下沉到 Forge，但模块不得拥有设备绝对坐标或编码细节。
-- 编排保存在用户的 `config.yaml` 中，记录当前选择的内置模板以及 `slot → module` 分配。用户可以选择模板和模块分配，但不能在配置中修改模板坐标。
+- 编排保存在用户的 `config.yaml` 中。每个 panel 同时记录内置模板和 `slot → module` 分配；`presentation.panels` 可包含多个 panel，随机调度时以整个 panel 为单位选择，因此 topology 和模块组合始终一起进入下一屏 Scene。用户不能在配置中修改模板坐标。
 
 模板/presentation 属于 Forge 和 Device Profile，不属于 `<library_dir>`。内容库只保存用户素材和各模块的数据源。
 
@@ -272,7 +274,9 @@ status_bar:
 
 三组内部按配置顺序从左到右显示，左右边距为 16px，模块间距为 12px；模块越界或不同组发生重叠时直接报错。内置状态栏模块包括 `weekday`、`time`、`solar_term` 和 `date`。当前画面中央显示最近已经开始的二十四节气，右上角显示星期；`time` 和 `date` 保留实现但默认配置不显示。节气根据太阳视黄经计算，并按 UTC+8 的传统历法日期切换。
 
-当前已用单区域 `landscape_1`、双区域 `landscape_2`、三区域 `landscape_3` 和 Kindle 四区域 `landscape_5` 打通链路。模板可以定义不属于任何 slot 的静态分隔线。内存中的下一屏使用 Scene fragments 保存模块选择结果，模板和 slot 映射由 Forge 的 Presentation 独立持有。
+当前已用单区域 `landscape_1`、双区域 `landscape_2`、三区域 `landscape_3` 和 Kindle 四区域 `landscape_5` 打通链路。模板可以定义不属于任何 slot 的静态分隔线。内存中的下一屏保存选中的 Panel 和 Scene fragments；Forge 仍通过独立的 Presentation 执行模板与 slot 映射。
+
+CrowPanel 当前配置两个等概率 panel：`landscape_3` 显示图片、item 和汉字，`landscape_1` 让动态生成的 24 点模块占满内容区。预生成的下一屏会固定这次 panel 选择，网页预览、设备下载和 ACK 指向同一个结果；设备消费后才随机准备下一组。
 
 当前配置：
 
@@ -306,7 +310,13 @@ panel:
 
 `images` 模块可用 `collection` 指定一个图片集合，用逗号分隔的 `collections` 指定多个集合，或用 `collections: "*"` 扫描 `<library_dir>/images/` 的所有直接子目录并统一随机轮换；名为 `raw` 的目录和空目录不参与，并避免连续重复。素材是已处理的 PNG 主图，允许不同尺寸和灰度模式；模块运行时按区域 `contain` 缩放并保留抗锯齿灰阶。Kindle 的灰度画布和 PNG encoder 保留并量化这些灰阶；CrowPanel 只在最终 1-bit encoder 中二值化。
 
-`checklist` 模块通过 `group` 选择 `checklists.csv` 中的一组项目，绘制标题、checkbox 和文字。Kindle 当前按 `瓜`、`果`、`家` 的顺序将三组放在 `landscape_5` 的三个区域，第四区使用 `images` 模块的全 collection 通配轮换。Kindle 客户端不接收或处理 checkbox 事件。
+`checklist` 模块通过 slot 的 `group` 引用 `config.yaml` 中的清单 ID，再按配置的任务 ID 和顺序读取 `checklists.csv`，绘制标题、checkbox 和文字。`type=personal` 的完成记录积 1 分，`type=family_task` 积 2 分；所有清单的积分进入同一个余额。Kindle 当前将三组配置清单放在 `landscape_5` 的三个区域，第四区使用 `images` 模块的全 collection 通配轮换。Kindle 客户端不接收或处理 checkbox 事件。
+
+Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像替代清单 ID 标题并靠右绘制，任务保留在左侧；人物素材仍属于内容库，不进入代码。
+
+当前配置只定义一个 reward：`{id: toy, name: 玩具, cost: 50, initial_points: 25}`。第一次兑换前余额含 25 分初始赠送，完成积分跨日累计并在 50 分封顶。达到 50 后网页按钮才允许手动兑换；兑换写入 `reward_redemptions.csv`，以该时间作为新一轮积分起点，因此余额归零且封顶期间的额外完成不结转。初始赠送只属于第一轮，不会在兑换后重新出现。
+
+需要显示奖励的 checklist slot 增加 `reward: toy`。Scene fragment 保存 reward 名称、封顶值和当前进度快照；画面只在该区域底部绘制“玩具”和无数字进度条。
 
 网页通过 `POST /v1/checklists/{item_id}` 提交 `completed` boolean。勾选时为服务器本地日期写入唯一的 `(date,item_id)` 记录，取消时只删除当天记录。跨过午夜后，旧行继续作为历史结算保留，但不再影响当天 checkbox，因此无需定时清空任务。操作只影响服务端随后渲染的 Frame；已 ACK 的设备当前画面保持不变，Kindle 在下一次手动唤醒刷新时取得新状态。
 
@@ -314,7 +324,7 @@ panel:
 
 `health` 模块从 `health/exercises.csv` 随机选择动作并避免连续重复。每个动作使用两张原创极简线稿，画面只显示大号名称、次数/时长和两帧姿势；`instruction` 保存在内容库中但第一版不显示。第一版包含深蹲、俯卧撑、臀桥、鸟狗式、平板支撑、提踵、开合跳和原地高抬腿，不记录完成状态。
 
-`math` 模块从 `math/problems.csv` 随机选择题目并避免连续重复。`type` 可为 `arithmetic`、`thinking`、`game24` 或 `all`。24 点的 `question` 是四个空格分隔的数字，画面显示“24点”标题和这四个数字；`answer` 仅保存解法，不显示。
+`math` 模块从 `math/problems.csv` 随机选择 `arithmetic` 和 `thinking` 题目并避免连续重复；`game24` 不存题库，而是在每次 prepare 时随机生成。生成器使用四个 1–9 的整数且每个恰好使用一次，只允许加法、非负减法以及以 1、2、3 为其中一侧因子的乘法，不允许除法或分数；服务端求解确认能得到 24 后才出题。Scene fragment 保存本次数字和解法，画面只显示“24点”标题与四个数字，不显示答案。slot 的 `type` 可为 `arithmetic`、`thinking`、`game24` 或 `all`。
 
 未来的“屏幕编辑器”是 presentation 配置的图形界面：浏览程序内置模板、查看 Scene 中的语义模块，并为某个 Device Profile 配置模块到区域的映射。编辑器仍写回同一份配置，不维护第二套状态。
 
@@ -323,7 +333,7 @@ panel:
 当前网页行为：
 
 - 每个 Device Instance 有独立区块，均提供当前画面、下一次刷新时间和下一帧缩略图；只有包含 `items` 模块的 presentation 显示随机预览、定时预览和“更改”。
-- “今日清单”是独立于设备区块的服务端交互区；它写入完成结算并刷新各设备的下一帧缩略图。
+- “今日清单”是独立于设备区块的服务端交互区；它写入完成结算、显示玩具进度条，并在满 50 分后允许手动兑换。勾选或兑换都会刷新各设备的下一帧缩略图。
 - 随机预览和定时预览不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
@@ -341,7 +351,7 @@ panel:
 
 ## 页面内容
 
-CrowPanel 画面保持无标题、说明、边框或分隔线。Kindle 的 `landscape_5` 保留贯穿的横向分隔线；竖线只分隔上方的“瓜/果”，下方“家/图片”之间不画线。清单模块负责组名和 checkbox。
+CrowPanel 画面保持无标题、说明、边框或分隔线。Kindle 的 `landscape_5` 保留贯穿的横向分隔线；竖线只分隔上方两个清单区域，下方清单与图片之间不画线。清单模块负责配置中的清单 ID 和 checkbox。
 
 第一版暂不加入项目图片、动画和交互控件。
 
@@ -379,12 +389,15 @@ devices:
       active_end: "22:00"
     presentation:
       status_bar: {}
-      panel:
-        template: landscape_3
-        slots:
-          1: {module: images, collections: "plants,animals"}
-          2: {module: items}
-          3: {module: chinese, source: select}
+      panels:
+        - template: landscape_3
+          slots:
+            1: {module: images, collections: "plants,animals"}
+            2: {module: items}
+            3: {module: chinese, source: select}
+        - template: landscape_1
+          slots:
+            1: {module: math, type: game24}
 ```
 
 内置 Device Profile 与用户的 Device Instance 分开保存。不同设备可以选择不同刷新窗口、状态栏、模板和模块；用户只选择 profile，不复制硬件参数。旧的顶层显示配置不再兼容。

@@ -109,6 +109,64 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.mode, "scheduled")
         self.assertEqual(settings.status_bar.center[0].module, "solar_term")
         self.assertEqual(settings.status_bar.right[0].module, "weekday")
+        self.assertEqual(
+            (
+                settings.reward.id,
+                settings.reward.name,
+                settings.reward.cost,
+                settings.reward.initial_points,
+            ),
+            ("toy", "玩具", 50, 25),
+        )
+
+    def test_loads_reward_setting(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n"
+                "reward: {id: book, name: 书, cost: 20, initial_points: 5}\n"
+                + device_sections(),
+                encoding="utf-8",
+            )
+
+            configured = resolved_settings(path)
+
+        self.assertEqual(
+            (
+                configured.reward.id,
+                configured.reward.name,
+                configured.reward.cost,
+                configured.reward.initial_points,
+            ),
+            ("book", "书", 20, 5),
+        )
+
+    def test_loads_checklist_membership_and_order(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n"
+                "checklists:\n"
+                "  person_1: [3, 1, 2]\n"
+                "  family: [4]\n"
+                + device_sections(),
+                encoding="utf-8",
+            )
+
+            configured = resolved_settings(path)
+
+        self.assertEqual(
+            [(group.id, group.item_ids) for group in configured.checklist_groups],
+            [("person_1", (3, 1, 2)), ("family", (4,))],
+        )
 
     def test_loads_status_bar_modules(self) -> None:
         with TemporaryDirectory() as directory:
@@ -179,6 +237,33 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.panel.template, "landscape_1")
         self.assertEqual(settings.panel.slots[0].module, "items")
         self.assertEqual(settings.panel.slots[0].option("mode"), "random")
+
+    def test_loads_presentation_panel_rotation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n"
+                + device_sections(
+                    "      panels:\n"
+                    "        - template: landscape_1\n"
+                    "          slots:\n"
+                    "            1: {module: items}\n"
+                    "        - template: landscape_1\n"
+                    "          slots:\n"
+                    "            1: {module: math, type: game24}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = resolved_settings(path)
+
+        self.assertEqual(len(settings.panels), 2)
+        self.assertEqual(settings.panels[1].slots[0].module, "math")
+        self.assertEqual(settings.panels[1].slots[0].option("type"), "game24")
 
     def test_rejects_selected_font_outside_candidates(self) -> None:
         with TemporaryDirectory() as directory:

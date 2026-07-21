@@ -193,6 +193,38 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertNotEqual(following_preview.item_id, first_preview.item_id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_random_scene_selects_panel_and_modules_together(self) -> None:
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        raw["channels"]["home"]["mode"] = "random"
+        presentation = raw["devices"]["wall"]["presentation"]
+        dashboard = presentation.pop("panel")
+        presentation["panels"] = [
+            dashboard,
+            {
+                "template": "landscape_1",
+                "slots": {1: {"module": "math", "type": "game24"}},
+            },
+        ]
+        self.config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "home_companian.service.random.choice",
+            side_effect=lambda values: values[-1],
+        ):
+            prepared = self.service._peek_next_scene(
+                self.service.settings(), datetime(2026, 7, 15, 12, 30)
+            )
+            rendered = self.service.render_next(datetime(2026, 7, 15, 12, 30))
+
+        self.assertEqual(prepared.panel.template, "landscape_1")
+        self.assertEqual(prepared.scene.fragments[0].module, "math")
+        self.assertIn('"type":"game24"', prepared.scene.fragments[0].content_id)
+        self.assertEqual(rendered.image.size, (792, 272))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_current_display_is_exact_last_device_render(self) -> None:
         self.assertIsNone(self.service.render_current())
 
@@ -287,7 +319,10 @@ class DisplayServiceTests(unittest.TestCase):
     def test_checklist_change_updates_prepared_frame_without_changing_other_content(self) -> None:
         root = self.config_path.parent
         (root / "checklists.csv").write_text(
-            "id,group,text\n1,瓜,EAT\n2,家,READ\n3,果,SHOWER\n",
+            "id,type,text\n"
+            "1,personal,EAT\n"
+            "2,family_task,READ\n"
+            "3,personal,SHOWER\n",
             encoding="utf-8",
         )
         collection = root / "images" / "etc"
@@ -295,6 +330,14 @@ class DisplayServiceTests(unittest.TestCase):
         Image.new("1", (100, 100), 255).save(collection / "only.png")
         content = self.config_path.read_text(encoding="utf-8")
         content = content.replace("mode: scheduled", "mode: random")
+        content = content.replace(
+            "default_device: wall\n",
+            "checklists:\n"
+            "  person_1: [1]\n"
+            "  family: [2]\n"
+            "  person_2: [3]\n"
+            "default_device: wall\n",
+        )
         content = content.replace("profile: crowpanel_579", "profile: kindle_6_167ppi_landscape")
         content = content.replace(
             "        template: landscape_1\n"
@@ -302,9 +345,9 @@ class DisplayServiceTests(unittest.TestCase):
             "          1: {module: items}\n",
             "        template: landscape_5\n"
             "        slots:\n"
-            "          1: {module: checklist, group: 瓜}\n"
-            "          2: {module: checklist, group: 家}\n"
-            "          3: {module: checklist, group: 果}\n"
+            "          1: {module: checklist, group: person_1}\n"
+            "          2: {module: checklist, group: family}\n"
+            "          3: {module: checklist, group: person_2}\n"
             "          4: {module: images, collection: etc}\n",
         )
         self.config_path.write_text(content, encoding="utf-8")

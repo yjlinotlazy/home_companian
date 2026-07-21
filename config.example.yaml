@@ -11,6 +11,11 @@ latin_fonts:
   思源黑体: /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf
 library_dir: library.example
 default_device: wall_panel
+reward: {id: toy, name: 玩具, cost: 50, initial_points: 25}
+checklists:
+  person_1: [1, 2, 3]
+  person_2: [6, 7, 8]
+  family: [4, 5]
 
 channels:
   home:
@@ -35,12 +40,15 @@ devices:
           - module: solar_term
         right:
           - module: weekday
-      panel:
-        template: landscape_3
-        slots:
-          1: {module: images, collections: "plants,animals"}
-          2: {module: items}
-          3: {module: chinese, source: select}
+      panels:
+        - template: landscape_3
+          slots:
+            1: {module: images, collections: "plants,animals"}
+            2: {module: items}
+            3: {module: chinese, source: select}
+        - template: landscape_1
+          slots:
+            1: {module: math, type: game24}
   kindleGen7dk:
     profile: kindle_6_167ppi_landscape
     channel: home
@@ -58,7 +66,7 @@ devices:
       panel:
         template: landscape_5
         slots:
-          1: {module: checklist, group: 瓜}
-          2: {module: checklist, group: 果}
-          3: {module: checklist, group: 家}
+          1: {module: checklist, group: person_1}
+          2: {module: checklist, group: person_2}
+          3: {module: checklist, group: family, reward: toy}
           4: {module: images, collections: "*"}

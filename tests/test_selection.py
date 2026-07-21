@@ -24,7 +24,7 @@ def settings(mode: str = "scheduled") -> Settings:
         items=(Item(1, "personal", "Walk"), Item(2, "personal", "Read")),
         schedule=(ScheduleEntry(time(12), 1), ScheduleEntry(time(13), 2)),
         random_items=(1, 2),
-        panel=PanelConfig("landscape_1", (SlotAssignment(1, "items"),)),
+        panels=(PanelConfig("landscape_1", (SlotAssignment(1, "items"),)),),
         status_bar=StatusBarConfig(),
     )
 

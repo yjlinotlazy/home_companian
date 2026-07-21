@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 from home_companian.checklists import ChecklistItem
-from home_companian.config import FontChoice
+from home_companian.config import FontChoice, RewardConfig
 from home_companian.devices import KINDLE_6_167PPI_LANDSCAPE
 from home_companian.forge.engine import Forge
 from home_companian.http_server import (
@@ -20,10 +20,12 @@ from home_companian.http_server import (
     is_random_preview,
     parse_item_id,
     parse_checklist_route,
+    parse_reward_route,
     parse_device_route,
     parse_font_name,
     parse_preview_time,
 )
+from home_companian.service import RewardStatus
 
 
 class HttpServerTests(unittest.TestCase):
@@ -43,6 +45,10 @@ class HttpServerTests(unittest.TestCase):
         self.assertIsNone(parse_checklist_route("/v1/devices/wall/next"))
         with self.assertRaises(ValueError):
             parse_checklist_route("/v1/checklists/nope")
+
+    def test_parses_reward_redemption_route(self) -> None:
+        self.assertEqual(parse_reward_route("/v1/rewards/toy/redeem"), "toy")
+        self.assertIsNone(parse_reward_route("/v1/checklists/1"))
 
     def test_kindle_browser_preview_stays_in_logical_landscape_orientation(self) -> None:
         source = Image.new("RGB", (800, 600), "white")
@@ -81,7 +87,8 @@ class HttpServerTests(unittest.TestCase):
             (FontChoice("Caskaydia", Path("/fonts/caskaydia.ttf")),),
             Path("/fonts/caskaydia.ttf"),
             (DevicePage("wall_panel", "crowpanel_579", 792, 272, True),),
-            ((ChecklistItem(1, "瓜", "EAT"), True),),
+            (("person_1", ChecklistItem(1, "personal", "EAT"), True),),
+            RewardStatus(RewardConfig("toy", "玩具", 50), 50),
         )
         self.assertIn("换一个".encode(), page)
         self.assertIn("定时预览".encode(), page)
@@ -97,6 +104,9 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn(b'<option value="\xe9\x9c\x9e\xe9\xb9\x9c\xe6\x96\x87\xe6\xa5\xb7" selected>', page)
         self.assertIn("今日清单".encode(), page)
         self.assertIn(b'data-checklist-id="1" checked', page)
+        self.assertIn(b'data-reward-id="toy"', page)
+        self.assertIn(b'data-action="redeem-reward"', page)
+        self.assertNotIn(b'data-action="redeem-reward" disabled', page)
 
     def test_index_stacks_crowpanel_then_kindle(self) -> None:
         page = index_html(

@@ -54,9 +54,30 @@ class RefreshConfig:
 
 
 @dataclass(frozen=True)
+class RewardConfig:
+    id: str
+    name: str
+    cost: int
+    initial_points: int = 0
+
+
+@dataclass(frozen=True)
+class ChecklistGroup:
+    id: str
+    item_ids: tuple[int, ...]
+
+
+DEFAULT_REWARD = RewardConfig("toy", "玩具", 50, 25)
+
+
+@dataclass(frozen=True)
 class PresentationConfig:
-    panel: PanelConfig
+    panels: tuple[PanelConfig, ...]
     status_bar: StatusBarConfig
+
+    @property
+    def panel(self) -> PanelConfig:
+        return self.panels[0]
 
 
 @dataclass(frozen=True)
@@ -87,8 +108,14 @@ class Settings:
     items: tuple[Item, ...]
     schedule: tuple[ScheduleEntry, ...]
     random_items: tuple[int, ...]
-    panel: PanelConfig
+    panels: tuple[PanelConfig, ...]
     status_bar: StatusBarConfig
+    reward: RewardConfig = DEFAULT_REWARD
+    checklist_groups: tuple[ChecklistGroup, ...] = ()
+
+    @property
+    def panel(self) -> PanelConfig:
+        return self.panels[0]
 
 
 @dataclass(frozen=True)
@@ -104,6 +131,8 @@ class Config:
     channels: tuple[ChannelConfig, ...]
     devices: tuple[DeviceConfig, ...]
     default_device: str
+    reward: RewardConfig = DEFAULT_REWARD
+    checklist_groups: tuple[ChecklistGroup, ...] = ()
 
     def for_device(self, device_id: str) -> Settings:
         device = next(
@@ -136,8 +165,10 @@ class Config:
             items=self.items,
             schedule=channel.schedule,
             random_items=channel.random_items,
-            panel=device.presentation.panel,
+            panels=device.presentation.panels,
             status_bar=device.presentation.status_bar,
+            reward=self.reward,
+            checklist_groups=self.checklist_groups,
         )
 
 
@@ -201,6 +232,55 @@ def _load_fonts(
     if font not in {choice.path for choice in fonts}:
         raise ConfigError(f"selected font must match one of the paths in {key}")
     return tuple(fonts)
+
+
+def _load_reward(root: dict[str, Any]) -> RewardConfig:
+    raw_reward = root.get("reward")
+    if raw_reward is None:
+        return DEFAULT_REWARD
+    reward = _mapping(raw_reward, "reward")
+    reward_id = _required_text(reward, "id", "reward")
+    name = _required_text(reward, "name", "reward")
+    cost = reward.get("cost")
+    if type(cost) is not int or cost <= 0:
+        raise ConfigError("reward.cost must be a positive integer")
+    initial_points = reward.get("initial_points", 0)
+    if (
+        type(initial_points) is not int
+        or initial_points < 0
+        or initial_points > cost
+    ):
+        raise ConfigError("reward.initial_points must be between 0 and reward.cost")
+    return RewardConfig(reward_id, name, cost, initial_points)
+
+
+def _load_checklist_groups(root: dict[str, Any]) -> tuple[ChecklistGroup, ...]:
+    raw_groups = root.get("checklists")
+    if raw_groups is None:
+        return ()
+    groups = _mapping(raw_groups, "checklists")
+    configured: list[ChecklistGroup] = []
+    assigned_ids: set[int] = set()
+    for raw_group_id, raw_item_ids in groups.items():
+        if not isinstance(raw_group_id, str) or not raw_group_id.strip():
+            raise ConfigError("checklist ids must be non-empty text")
+        group_id = raw_group_id.strip()
+        if not isinstance(raw_item_ids, list) or not raw_item_ids:
+            raise ConfigError(f"checklists.{group_id} must be a non-empty list")
+        if not all(type(item_id) is int and item_id > 0 for item_id in raw_item_ids):
+            raise ConfigError(
+                f"checklists.{group_id} must contain positive integer item ids"
+            )
+        if len(set(raw_item_ids)) != len(raw_item_ids):
+            raise ConfigError(f"checklists.{group_id} must not contain duplicate ids")
+        duplicate = assigned_ids.intersection(raw_item_ids)
+        if duplicate:
+            raise ConfigError(
+                f"checklist item {min(duplicate)} is assigned to multiple checklists"
+            )
+        assigned_ids.update(raw_item_ids)
+        configured.append(ChecklistGroup(group_id, tuple(raw_item_ids)))
+    return tuple(configured)
 
 
 def _load_items(library_dir: Path) -> tuple[Item, ...]:
@@ -420,13 +500,22 @@ def _load_device(
         device.get("presentation"),
         f"devices.{device_id}.presentation",
     )
+    raw_panels = presentation.get("panels")
+    if raw_panels is None:
+        panels = (_load_panel(presentation),)
+    else:
+        if not isinstance(raw_panels, list) or not raw_panels:
+            raise ConfigError(f"devices.{device_id}.presentation.panels must be a non-empty list")
+        panels = tuple(
+            _load_panel({"panel": raw_panel}) for raw_panel in raw_panels
+        )
     return DeviceConfig(
         id=device_id,
         profile=profile,
         channel=channel,
         refresh=RefreshConfig(minutes, active_start, active_end),
         presentation=PresentationConfig(
-            panel=_load_panel(presentation),
+            panels=panels,
             status_bar=_load_status_bar(presentation),
         ),
     )
@@ -441,6 +530,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
 
     root = _mapping(raw, "config")
+    reward = _load_reward(root)
+    checklist_groups = _load_checklist_groups(root)
     library_dir = _configured_path(root.get("library_dir"), "library_dir", path)
     items = _load_items(library_dir)
     item_ids = {item.id for item in items}
@@ -478,4 +569,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         channels=channels,
         devices=devices,
         default_device=default_device,
+        reward=reward,
+        checklist_groups=checklist_groups,
     )

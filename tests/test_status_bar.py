@@ -39,7 +39,7 @@ def settings(status_bar: StatusBarConfig) -> Settings:
         items=(Item(1, "personal", "Walk"),),
         schedule=(ScheduleEntry(datetime.strptime("12:00", "%H:%M").time(), 1),),
         random_items=(1,),
-        panel=PanelConfig("landscape_1", (SlotAssignment(1, "items"),)),
+        panels=(PanelConfig("landscape_1", (SlotAssignment(1, "items"),)),),
         status_bar=status_bar,
     )
 
