@@ -450,6 +450,8 @@ latin_fonts:
 
 图片中转已实现；位置提交仍是后续设计：
 
+户外使用的完整链路是：手机通过 WireGuard VPN 访问家中 Home Companian 网页并提交状态更新 → 家中服务器重新渲染并原地覆盖 `library/rendered/kindleGen7dk.png` → Dropbox 客户端自动同步该文件 → Kindle 连接已开启“最大兼容性”的 iPhone 热点，通过私密 Dropbox HTTPS 链接取得新图。WireGuard 只用于手机安全访问家中服务器；Kindle 不需要加入 VPN，也不直接访问管理网页。
+
 1. 手机在外通过 VPN 访问 Home Companian，并在用户授权后提交位置。
 2. 服务器根据位置完成计算，只把计算结果用于重新渲染，不把原始坐标写入公开文件。
 3. Kindle 留在家中时继续使用家庭 Wi-Fi 和现有设备接口；Kindle 随身携带时可通过手机热点联网。

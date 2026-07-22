@@ -19,6 +19,8 @@
 
 该链路已在 Kindle Gen 7 实机验证：服务器把最终 600×800 PNG 原地覆盖到 `library/rendered/kindleGen7dk.png`，Dropbox 自动同步；Kindle 无法连接家庭服务器时，等待本地请求超时后从 `REMOTE_IMAGE_URL` 下载并显示图片。
 
+户外更新时，手机先通过 WireGuard VPN 打开家中的 Home Companian 网页并修改状态；家中服务器生成新图，Dropbox 完成同步后，连接 iPhone 热点的 Kindle 再从公网共享链接下载。Kindle 本身不需要连接 WireGuard。
+
 - Dropbox 共享链接在 Kindle 的私有 `client.conf` 中配置，结尾使用 `dl=1`，不得提交到仓库。
 - iPhone 个人热点必须打开“最大兼容性”（Maximize Compatibility）。
 - 服务器必须原地覆盖已有 PNG，不能删除后重建或使用原子替换；否则 Dropbox 会保留文件但使原共享链接失效。
