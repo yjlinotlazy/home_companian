@@ -1,4 +1,5 @@
 SERVER_URL=https://<server-host>:<port>
+REMOTE_IMAGE_URL=
 DEVICE_ID=kindleGen7dk
 CA_CERT=/mnt/us/home_companian/rootCA.pem
 INSECURE=0

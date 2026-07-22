@@ -266,6 +266,7 @@ class DisplayService:
                     now=now,
                 )
                 self._pending_display_key = key
+                self._publish_rendered_image(self._pending_display)
             return self._pending_display
 
     def refresh_delivery(self, now: datetime | None = None) -> RenderedDisplay:
@@ -280,7 +281,38 @@ class DisplayService:
             self._pending_display = rendered
             self._pending_display_key = self._delivery_key(now or datetime.now())
             self._last_ack = None
+            self._publish_rendered_image(rendered)
             return rendered
+
+    def _publish_rendered_image(self, rendered: RenderedDisplay) -> None:
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            return
+        rendered_dir = settings.library_dir / "rendered"
+        rendered_dir.mkdir(parents=True, exist_ok=True)
+        target = rendered_dir / f"{self.device_id}.png"
+        if target.exists():
+            with target.open("r+b") as handle:
+                handle.write(rendered.frame.payload)
+                handle.truncate()
+                handle.flush()
+                os.fsync(handle.fileno())
+            return
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=rendered_dir,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(rendered.frame.payload)
+            os.replace(temporary_path, target)
+        except OSError:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
 
     def acknowledge(self, frame_id: str, status: str) -> None:
         if status not in {"displayed", "failed"}:
@@ -339,6 +371,13 @@ class DisplayService:
         now = now or datetime.now()
         if self.display_mode(now) == TREASURE_HUNT_MODE:
             return self._render_treasure_hunt(settings, now)
+        return self._render_taskboard_next(settings, now)
+
+    def _render_taskboard_next(
+        self,
+        settings: Settings,
+        now: datetime,
+    ) -> RenderedDisplay:
         next_at = self._next_check_at(settings, now)
         if self._has_forced_scene(settings):
             prepared = self._peek_next_scene(settings, now)
@@ -348,6 +387,14 @@ class DisplayService:
             item = select_scheduled(settings, next_at.time())
             prepared = self._scene_for_item(settings, item, next_at)
         return self._render_scene(prepared, settings, next_at)
+
+    def preview_taskboard_delivery(
+        self,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        """Preview the taskboard independently of the selected display mode."""
+        now = now or datetime.now()
+        return self._render_taskboard_next(self.settings(), now)
 
     def preview_next_delivery(self, now: datetime | None = None) -> RenderedDisplay:
         """Preview the pending delivery, or the scene the next GET would consume."""
@@ -604,6 +651,7 @@ class DisplayService:
             self._pending_display = rendered
             self._pending_display_key = self._delivery_key(now)
             self._last_ack = None
+            self._publish_rendered_image(rendered)
             return rendered
 
     def refresh_prepared_checklists(self) -> None:
@@ -617,6 +665,7 @@ class DisplayService:
             self._pending_display = self._render_treasure_hunt(self.settings(), now)
             self._pending_display_key = self._delivery_key(now)
             self._last_ack = None
+            self._publish_rendered_image(self._pending_display)
 
     def _refresh_prepared_modules(self, module_names: frozenset[str]) -> None:
         settings = self.settings()

@@ -150,7 +150,7 @@ class HttpServerTests(unittest.TestCase):
         self.assertLess(page.index("<h2>CrowPanel"), divider)
         self.assertLess(divider, page.index("<h2>Kindle"))
         self.assertIn('/v1/devices/wall_panel/preview.png', page)
-        self.assertIn('/v1/devices/kindleGen7dk/preview.png', page)
+        self.assertIn('/v1/devices/kindleGen7dk/taskboard-preview.png', page)
         self.assertIn("<p data-unconfirmed>设备尚未确认显示画面</p>", page)
         self.assertEqual(
             page.count('<button type="button" data-action="random-preview">'), 1

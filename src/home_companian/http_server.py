@@ -116,6 +116,7 @@ def index_html(
         <button type="button" data-action="time-preview">预览</button></div>
       </div>"""
         if device.profile_id.startswith("kindle"):
+            preview_action = "taskboard-preview.png"
             refresh_controls = """<button type="button" data-action="refresh-rendered">手动刷新</button>
       <img data-next-preview alt="Kindle rendered image preview">"""
             mode_controls = """<div class="mode-controls">
@@ -128,6 +129,7 @@ def index_html(
     </div>
     <h3 data-mode-section-title="taskboard">任务板</h3>"""
         else:
+            preview_action = "preview.png"
             refresh_controls = f"""<span>下次刷新：<span data-next-refresh-time>加载中</span></span>
       <img data-next-preview alt="{label} next frame preview">"""
             mode_controls = ""
@@ -138,7 +140,7 @@ def index_html(
   <div class="display-layout">
     <div class="display-main">
       <img class="device-preview" data-current-preview
-           src="/v1/devices/{encoded_id}/preview.png"
+           src="/v1/devices/{encoded_id}/{preview_action}"
            width="{device.width}" height="{device.height}"
            alt="{label} display preview">
       <p data-unconfirmed{unconfirmed}>设备尚未确认显示画面</p>
@@ -648,7 +650,16 @@ class DeviceServices:
     def refresh_prepared_checklists(self) -> None:
         configured = load_config(self.config_path)
         for device in configured.devices:
-            self.get(device.id).refresh_prepared_checklists()
+            device_service = self.get(device.id)
+            device_service.refresh_prepared_checklists()
+            if device.profile.startswith("kindle_"):
+                device_service.refresh_delivery()
+
+    def refresh_kindles(self) -> None:
+        configured = load_config(self.config_path)
+        for device in configured.devices:
+            if device.profile.startswith("kindle_"):
+                self.get(device.id).refresh_delivery()
 
     def refresh_prepared_treasure_hunts(self) -> None:
         configured = load_config(self.config_path)
@@ -715,6 +726,9 @@ def make_handler(
                 next_preview_device_id = parse_device_route(
                     request.path, "next-preview.png"
                 )
+                taskboard_preview_device_id = parse_device_route(
+                    request.path, "taskboard-preview.png"
+                )
                 next_device_id = parse_device_route(request.path, "next")
                 if preview_device_id is not None:
                     device_service = device_services.get(preview_device_id)
@@ -773,10 +787,24 @@ def make_handler(
                         "image/png",
                         device_preview_png(rendered),
                     )
+                elif taskboard_preview_device_id is not None:
+                    rendered = device_services.get(
+                        taskboard_preview_device_id
+                    ).preview_taskboard_delivery()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                    )
                 elif next_refresh_device_id is not None:
                     device_service = device_services.get(next_refresh_device_id)
                     now = datetime.now()
-                    rendered = device_service.preview_next_delivery(now)
+                    if device_service.settings().profile_id.startswith("kindle_"):
+                        rendered = device_service.preview_taskboard_delivery(now)
+                        preview_action = "taskboard-preview.png"
+                    else:
+                        rendered = device_service.preview_next_delivery(now)
+                        preview_action = "next-preview.png"
                     encoded_id = quote(next_refresh_device_id, safe="")
                     self._send_json(
                         HTTPStatus.OK,
@@ -784,7 +812,7 @@ def make_handler(
                             "next_at": device_service.next_check_at(now).isoformat(),
                             "item_id": rendered.item_id,
                             "image_url": (
-                                f"/v1/devices/{encoded_id}/next-preview.png"
+                                f"/v1/devices/{encoded_id}/{preview_action}"
                             ),
                         },
                     )
@@ -987,6 +1015,7 @@ def make_handler(
                     if name is None:
                         raise ValueError("font name must be provided")
                     path = service.select_font(group, name)
+                    device_services.refresh_kindles()
                     self._send_json(
                         HTTPStatus.OK,
                         {"group": group, "name": name, "path": str(path)},

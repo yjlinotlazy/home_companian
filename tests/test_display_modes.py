@@ -121,6 +121,29 @@ class KindleDisplayModeTests(unittest.TestCase):
         self.assertEqual(taskboard.frame.profile_id, "kindle_6_167ppi_landscape")
         self.assertEqual(self.service.deliver(now).frame.id, taskboard.frame.id)
 
+    def test_taskboard_preview_ignores_treasure_hunt_mode(self) -> None:
+        now = datetime(2026, 7, 22, 10, 0)
+        selected = self.service.select_display_mode(TREASURE_HUNT_MODE, now)
+
+        preview = self.service.preview_taskboard_delivery(now)
+
+        self.assertEqual(selected.frame.profile_id, "kindle_6_167ppi")
+        self.assertEqual(preview.frame.profile_id, "kindle_6_167ppi_landscape")
+        self.assertEqual(preview.image.size, (800, 600))
+        self.assertEqual(self.service.deliver(now).frame.id, selected.frame.id)
+
+    def test_delivery_publishes_final_physical_png(self) -> None:
+        rendered = self.service.deliver(datetime(2026, 7, 22, 10, 0))
+        published = Path(self.temporary_directory.name) / "rendered" / "kindle.png"
+
+        self.assertEqual(published.read_bytes(), rendered.frame.payload)
+        with Image.open(published) as image:
+            self.assertEqual(image.size, (600, 800))
+
+        inode = published.stat().st_ino
+        self.service.refresh_delivery(datetime(2026, 7, 22, 10, 1))
+        self.assertEqual(published.stat().st_ino, inode)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,7 @@ class DeviceConfig:
     channel: str
     refresh: RefreshConfig
     presentation: PresentationConfig
+    remote_image_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -653,6 +654,16 @@ def _load_device(
     channel = _required_text(device, "channel", f"devices.{device_id}")
     if channel not in channel_ids:
         raise ConfigError(f"device {device_id} references unknown channel: {channel}")
+    remote_image_url = device.get("remote_image_url")
+    if remote_image_url is not None:
+        if (
+            not isinstance(remote_image_url, str)
+            or not remote_image_url.startswith("https://")
+        ):
+            raise ConfigError(
+                f"devices.{device_id}.remote_image_url must use HTTPS"
+            )
+        remote_image_url = remote_image_url.strip()
 
     presentation_config = _load_presentation(device_id, device)
     display_profiles = {
@@ -753,6 +764,7 @@ def _load_device(
         channel=channel,
         refresh=RefreshConfig(minutes, active_start, active_end, periods),
         presentation=presentation_config,
+        remote_image_url=remote_image_url,
     )
 
 

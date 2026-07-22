@@ -11,13 +11,31 @@
 - 首次运行：下载 `/next` → `eips` 全刷 → 提交 `displayed` ACK。
 - 正常休眠：厂商屏保短暂绘制后，客户端用缓存 dashboard 覆盖；设备仍正常 suspend。
 - 手动唤醒：等待 Wi-Fi 进入 `CONNECTED`，再下载、显示并 ACK 新 Frame。
+- 家中服务器不可达且配置了 `REMOTE_IMAGE_URL` 时：改为下载公网静态 PNG；此路径没有 ACK。
 - 不设置 RTC，不会定时自动唤醒。
 - 下载或显示失败时不清屏，保留缓存画面。
+
+## 已验证的手机热点与 Dropbox 回退链路
+
+该链路已在 Kindle Gen 7 实机验证：服务器把最终 600×800 PNG 原地覆盖到 `library/rendered/kindleGen7dk.png`，Dropbox 自动同步；Kindle 无法连接家庭服务器时，等待本地请求超时后从 `REMOTE_IMAGE_URL` 下载并显示图片。
+
+- Dropbox 共享链接在 Kindle 的私有 `client.conf` 中配置，结尾使用 `dl=1`，不得提交到仓库。
+- iPhone 个人热点必须打开“最大兼容性”（Maximize Compatibility）。
+- 服务器必须原地覆盖已有 PNG，不能删除后重建或使用原子替换；否则 Dropbox 会保留文件但使原共享链接失效。
+- 公网静态图片没有 Frame ACK，网页中的“当前画面”不会因此变成已确认状态。
+
+关闭家庭服务器后运行 `./client.sh`，以下日志表示整个回退流程成功：
+
+```text
+Home server unavailable; downloading remote image
+Displayed frame remote-static
+```
 
 ## 前提
 
 - Kindle 已越狱，并能通过 SSH 登录。
 - Kindle 上存在 `curl`、`eips`、`lipc-wait-event` 和 `lipc-get-prop`。
+- 使用 iPhone 个人热点时，必须打开“最大兼容性”（Maximize Compatibility），旧 Kindle 才能连接。
 - Home Companian 服务端已配置 `kindleGen7dk` 并可从局域网访问。
 - Linux 电脑已使用 mkcert 配置服务端 HTTPS。
 
@@ -71,6 +89,7 @@ cp client.conf.example client.conf
 
 ```sh
 SERVER_URL=https://<服务器IP>:<端口>
+REMOTE_IMAGE_URL='https://<private-shared-link>'
 DEVICE_ID=kindleGen7dk
 CA_CERT=/mnt/us/home_companian/rootCA.pem
 INSECURE=0
@@ -81,6 +100,8 @@ WIFI_WAIT_SECONDS=60
 ```
 
 `INSECURE=1` 只用于临时排查证书问题，正常使用必须恢复为 `0`。
+
+`REMOTE_IMAGE_URL` 可留空。外出使用手机热点时，可在 Kindle 本地的 `client.conf` 中填入 `library/rendered/kindleGen7dk.png` 对应的 Dropbox 直接下载共享链接。脚本先尝试家中服务器，失败后跟随重定向下载该 PNG。完整共享链接等同访问凭据，不得写入仓库、示例配置或日志。公网静态图没有 ACK，因此网页“当前画面”只会在通过家中服务器刷新成功后确认更新。
 
 ## 5. 设置执行权限
 

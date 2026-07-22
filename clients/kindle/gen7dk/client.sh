@@ -15,6 +15,7 @@ fi
 . "$CONFIG_PATH"
 
 : "${SERVER_URL:?SERVER_URL must be configured}"
+REMOTE_IMAGE_URL=${REMOTE_IMAGE_URL:-}
 DEVICE_ID=${DEVICE_ID:-kindleGen7dk}
 CA_CERT=${CA_CERT:-}
 INSECURE=${INSECURE:-0}
@@ -62,48 +63,69 @@ send_ack() {
 }
 
 echo "Downloading $NEXT_URL"
+download_source=server
 if ! curl_with_tls -fSs \
     --connect-timeout 15 \
     --max-time 60 \
     -D "$HEADERS_TEMP" \
     -o "$FRAME_TEMP" \
     "$NEXT_URL"; then
-    echo "Frame download failed; keeping the current display" >&2
-    exit 1
+    if [ -z "$REMOTE_IMAGE_URL" ]; then
+        echo "Frame download failed; keeping the current display" >&2
+        exit 1
+    fi
+    echo "Home server unavailable; downloading remote image"
+    download_source=remote
+    : > "$HEADERS_TEMP"
+    if ! curl -fLSs \
+        --connect-timeout 15 \
+        --max-time 60 \
+        -o "$FRAME_TEMP" \
+        "$REMOTE_IMAGE_URL"; then
+        echo "Remote image download failed; keeping the current display" >&2
+        exit 1
+    fi
 fi
 
-frame_id=$(header_value 'X-Frame-Id')
-content_type=$(header_value 'Content-Type')
-next_check_seconds=$(header_value 'X-Next-Check-Seconds')
+if [ "$download_source" = "server" ]; then
+    frame_id=$(header_value 'X-Frame-Id')
+    content_type=$(header_value 'Content-Type')
+    next_check_seconds=$(header_value 'X-Next-Check-Seconds')
 
-case "$frame_id" in
-    ''|*[!A-Za-z0-9._:]*)
-        echo "Missing or invalid X-Frame-Id" >&2
-        exit 1
-        ;;
-esac
+    case "$frame_id" in
+        ''|*[!A-Za-z0-9._:]*)
+            echo "Missing or invalid X-Frame-Id" >&2
+            exit 1
+            ;;
+    esac
 
-case "$content_type" in
-    image/png*) ;;
-    *)
-        echo "Expected image/png, received: ${content_type:-missing}" >&2
-        exit 1
-        ;;
-esac
+    case "$content_type" in
+        image/png*) ;;
+        *)
+            echo "Expected image/png, received: ${content_type:-missing}" >&2
+            exit 1
+            ;;
+    esac
 
-case "$next_check_seconds" in
-    ''|*[!0-9]*) next_check_seconds=1800 ;;
-esac
+    case "$next_check_seconds" in
+        ''|*[!0-9]*) next_check_seconds=1800 ;;
+    esac
+else
+    frame_id=remote-static
+    next_check_seconds=1800
+fi
 
 mv "$FRAME_TEMP" "$FRAME_PATH" || exit 1
 
 if ! eips -g "$FRAME_PATH" -w "$WAVEFORM" -f; then
-    echo "eips failed; reporting failed ACK" >&2
-    send_ack failed || true
+    echo "eips failed" >&2
+    if [ "$download_source" = "server" ]; then
+        send_ack failed || true
+    fi
     exit 1
 fi
 
-if ! send_ack displayed; then
+if [ "$download_source" = "server" ] && ! send_ack displayed; then
     echo "Display succeeded, but ACK failed" >&2
     exit 1
 fi

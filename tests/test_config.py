@@ -90,6 +90,30 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(configured.active_start.hour, 8)
         self.assertEqual(configured.panel.template, "landscape_2")
 
+    def test_loads_remote_image_url_on_device(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            content = device_sections().replace(
+                "    profile: crowpanel_579\n",
+                "    profile: crowpanel_579\n"
+                "    remote_image_url: https://example.invalid/device.png?dl=1\n",
+            )
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n" + content,
+                encoding="utf-8",
+            )
+
+            device = load_config(path).devices[0]
+
+        self.assertEqual(
+            device.remote_image_url,
+            "https://example.invalid/device.png?dl=1",
+        )
+
     def test_loads_daily_variable_refresh_schedule(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

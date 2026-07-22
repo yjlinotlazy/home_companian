@@ -47,6 +47,8 @@ CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 
 
 通用设备接口使用配置中的 ID，例如 `/v1/devices/kindleGen7dk/next`。`/display.bin` 是唯一保留的旧固件兼容口，固定服务 `wall_panel`。
 
+Kindle 待投递画面同时会写入内容库的 `rendered/<device-id>.png`，可由 Dropbox 等同步后供手机热点环境下下载。已有文件会保留其身份并原地覆盖内容，不能用删除后重建或原子替换，否则 Dropbox 共享链接会失效。公网链接按设备保存在本机私有配置的 `devices.<device-id>.remote_image_url`，并复制到对应 Kindle 的本地 `client.conf`；不要写入仓库或示例配置。
+
 设备端源码与服务端放在同一仓库：
 
 - `clients/crowpanel/crowpanel-579/`：当前 CrowPanel ESP-IDF 客户端；部署方法见其 [README.md](clients/crowpanel/crowpanel-579/README.md)。
@@ -180,7 +182,7 @@ Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力
 
 数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
 
-主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧预览；右侧预览统一按设备原始宽高的 50% 显示。包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
+主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧预览；右侧预览统一按设备原始宽高的 50% 显示。Kindle 的任务板区域始终预览任务板，不随当前显示模式切换成寻宝画面；寻宝使用自己的独立预览。包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 
 设备专用 `preview.png` 优先显示设备已 ACK 的当前画面；尚无 ACK 时仍返回服务端生成的候选图，并在主页标注“设备尚未确认显示画面”，方便接入和调试。
 
