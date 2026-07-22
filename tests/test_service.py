@@ -231,6 +231,42 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(device.item_id, 1)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_random_preview_cycles_through_every_layout(self) -> None:
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        raw["channels"]["home"]["mode"] = "random"
+        presentation = raw["devices"]["wall"]["presentation"]
+        dashboard = presentation.pop("panel")
+        presentation["panels"] = [
+            dashboard,
+            {
+                "template": "landscape_1",
+                "slots": {1: {"module": "math", "type": "pattern"}},
+            },
+        ]
+        self.config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        previews = [
+            self.service.render(preview_random=True),
+            self.service.render(preview_random=True),
+            self.service.render(preview_random=True),
+        ]
+
+        self.assertEqual(sum(preview.item_id == 0 for preview in previews[:2]), 1)
+        self.assertNotEqual(previews[1].item_id == 0, previews[2].item_id == 0)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_selected_preview_returns_exact_cached_frame(self) -> None:
+        rendered = self.service.render(preview_random=True)
+        preview_id = self.service.store_selected_preview(rendered)
+
+        self.assertIs(self.service.selected_preview(preview_id), rendered)
+        with self.assertRaisesRegex(ValueError, "unknown preview id"):
+            self.service.selected_preview("0" * 64)
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_next_random_preview_is_stable_until_device_consumes_it(self) -> None:
         self.config_path.write_text(
             self.config_path.read_text(encoding="utf-8").replace(
@@ -314,6 +350,56 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(prepared.scene.fragments[0].module, "math")
         self.assertIn('"type":"game24"', prepared.scene.fragments[0].content_id)
         self.assertEqual(rendered.image.size, (792, 272))
+
+    def test_display_profile_controls_frequency_and_panel_pool(self) -> None:
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        presentation = raw["devices"]["wall"]["presentation"]
+        dashboard = presentation.pop("panel")
+        presentation["panels"] = {
+            "dashboard": dashboard,
+            "math": {
+                "template": "landscape_1",
+                "slots": {1: {"module": "math", "type": "pattern"}},
+            },
+        }
+        presentation["display_profiles"] = {
+            "active": {"minutes": 15, "panels": ["dashboard", "math"]},
+            "daytime": {"minutes": 30, "panels": ["dashboard"]},
+        }
+        raw["devices"]["wall"]["refresh"] = {
+            "schedule": [
+                {"start": "07:00", "end": "10:00", "profile": "active"},
+                {"start": "10:00", "end": "17:00", "profile": "daytime"},
+                {"start": "17:00", "end": "21:00", "profile": "active"},
+            ]
+        }
+        self.config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        settings = self.service.settings()
+
+        with patch(
+            "home_companian.service.random.choice",
+            side_effect=lambda values: values[-1],
+        ):
+            morning = self.service._prepare_scene(
+                settings, datetime(2026, 7, 22, 9, 0)
+            )
+            daytime = self.service._prepare_scene(
+                settings, datetime(2026, 7, 22, 12, 0)
+            )
+
+        self.assertEqual(morning.scene.fragments[0].module, "math")
+        self.assertEqual(daytime.scene.fragments[0].module, "items")
+        self.assertEqual(
+            self.service.next_check_at(datetime(2026, 7, 22, 9, 1)),
+            datetime(2026, 7, 22, 9, 15),
+        )
+        self.assertEqual(
+            self.service.next_check_at(datetime(2026, 7, 22, 12, 1)),
+            datetime(2026, 7, 22, 12, 30),
+        )
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_current_display_is_exact_last_device_render(self) -> None:

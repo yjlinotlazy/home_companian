@@ -9,6 +9,7 @@ from unittest.mock import patch
 from home_companian.config import ConfigError
 from home_companian.domain import Rect, SlotAssignment
 from home_companian.modules.math import MathModule, load_math_problems, solve_game24
+from home_companian.modules.math_games import PatternGame
 
 
 FONT = Path("/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf")
@@ -84,12 +85,92 @@ class MathModuleTests(unittest.TestCase):
         second = json.loads(module.prepare(self.settings, datetime.now(), assignment))
         self.assertNotEqual(sorted(first["numbers"]), sorted(second["numbers"]))
 
+    def test_generates_five_item_pattern_with_hidden_sixth_answer(self) -> None:
+        snapshot = json.loads(
+            MathModule().prepare(
+                self.settings,
+                datetime.now(),
+                SlotAssignment(1, "math", (("type", "pattern"),)),
+            )
+        )
+
+        self.assertEqual(snapshot["type"], "pattern")
+        self.assertEqual(len(snapshot["items"]), 5)
+        self.assertTrue(all(isinstance(item, str) and item for item in snapshot["items"]))
+        self.assertIsInstance(snapshot["answer"], str)
+        self.assertTrue(snapshot["answer"])
+
+    def test_pattern_families_have_unambiguous_sixth_item(self) -> None:
+        generators = (
+            PatternGame._count_up,
+            PatternGame._count_down,
+            PatternGame._alternating,
+            PatternGame._repeat_symbols,
+            PatternGame._repeat_symbol_triple,
+            PatternGame._repeat_symbol_pair,
+            PatternGame._rotate_directions,
+            PatternGame._repeat_words,
+            PatternGame._alternating_steps,
+            PatternGame._growing_steps,
+        )
+        for generator in generators:
+            family, values = generator()
+            self.assertEqual(len(values), 6, family)
+            if family in {"alternating", "symbols"}:
+                self.assertEqual(values[5], values[1])
+            elif family in {"words", "symbol_triple", "symbol_pair"}:
+                self.assertEqual(values[5], values[2])
+            elif family == "directions":
+                self.assertEqual(values[5], values[1])
+            elif family == "count_up":
+                numbers = tuple(map(int, values))
+                self.assertEqual(len(set(b - a for a, b in zip(numbers, numbers[1:]))), 1)
+                self.assertGreater(numbers[1], numbers[0])
+            elif family == "count_down":
+                numbers = tuple(map(int, values))
+                self.assertEqual(len(set(a - b for a, b in zip(numbers, numbers[1:]))), 1)
+                self.assertGreater(numbers[0], numbers[1])
+            elif family == "alternating_steps":
+                numbers = tuple(map(int, values))
+                steps = tuple(b - a for a, b in zip(numbers, numbers[1:]))
+                self.assertEqual((steps[0], steps[1], steps[0], steps[1], steps[0]), steps)
+            elif family == "growing_steps":
+                numbers = tuple(map(int, values))
+                self.assertEqual(
+                    tuple(b - a for a, b in zip(numbers, numbers[1:])),
+                    (1, 2, 3, 4, 5),
+                )
+
+    def test_games_group_rotates_generated_game_types(self) -> None:
+        module = MathModule()
+        assignment = SlotAssignment(1, "math", (("type", "games"),))
+        first = json.loads(module.prepare(self.settings, datetime.now(), assignment))
+        second = json.loads(module.prepare(self.settings, datetime.now(), assignment))
+        self.assertEqual({first["type"], second["type"]}, {"game24", "pattern"})
+
     @unittest.skipUnless(FONT.exists(), "Source Han Sans font is not installed")
     def test_renders_game24_as_numbers_only(self) -> None:
         content_id = MathModule().prepare(
             self.settings,
             datetime.now(),
             SlotAssignment(1, "math", (("type", "game24"),)),
+        )
+        rendered = MathModule().render(
+            self.settings, content_id, Rect(0, 0, 792, 228), datetime.now()
+        )
+        self.assertEqual((rendered.size, rendered.mode), ((792, 228), "1"))
+        self.assertEqual(rendered.getextrema(), (0, 255))
+
+    @unittest.skipUnless(FONT.exists(), "Source Han Sans font is not installed")
+    def test_renders_pattern_as_five_items_and_question_mark(self) -> None:
+        content_id = json.dumps(
+            {
+                "type": "pattern",
+                "family": "words",
+                "items": ["猫", "狗", "兔", "猫", "狗"],
+                "answer": "兔",
+            },
+            ensure_ascii=False,
         )
         rendered = MathModule().render(
             self.settings, content_id, Rect(0, 0, 792, 228), datetime.now()

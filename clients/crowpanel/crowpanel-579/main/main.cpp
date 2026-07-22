@@ -57,6 +57,11 @@ extern "C" void app_main(void)
 
     EPD_GPIOInit();
 
+    // Establish the vendor's known full-refresh baseline before the fast update.
+    EPD_FastMode1Init();
+    EPD_Display_Clear();
+    EPD_Update();
+
     EPD_FastMode1Init();
     EPD_Display(ImageBW);
     EPD_FastUpdate();

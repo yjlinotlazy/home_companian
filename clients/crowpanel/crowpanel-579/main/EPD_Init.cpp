@@ -11,7 +11,7 @@ constexpr char TAG[] = "ssd1683";
 constexpr TickType_t BUSY_TIMEOUT = pdMS_TO_TICKS(30000);
 }
 
-static void EPD_READBUSY(void)
+void EPD_READBUSY(void)
 {
     const TickType_t start = xTaskGetTickCount();
     while (1) {
@@ -27,13 +27,29 @@ static void EPD_READBUSY(void)
     }
 }
 
-static void EPD_HW_RESET(void)
+void EPD_HW_RESET(void)
 {
     vTaskDelay(pdMS_TO_TICKS(10));
     EPD_RES_Clr();
     vTaskDelay(pdMS_TO_TICKS(10));
     EPD_RES_Set();
     vTaskDelay(pdMS_TO_TICKS(10));
+    EPD_READBUSY();
+}
+
+void EPD_Update(void)
+{
+    EPD_WR_REG(0x22);
+    EPD_WR_DATA8(0xF7);
+    EPD_WR_REG(0x20);
+    EPD_READBUSY();
+}
+
+void EPD_PartUpdate(void)
+{
+    EPD_WR_REG(0x22);
+    EPD_WR_DATA8(0xDC);
+    EPD_WR_REG(0x20);
     EPD_READBUSY();
 }
 
@@ -81,7 +97,7 @@ void EPD_FastMode1Init(void)
     EPD_READBUSY();
 }
 
-static void EPD_SetRAMMP(void)
+void EPD_SetRAMMP(void)
 {
     EPD_WR_REG(0x11);
     EPD_WR_DATA8(0x05);
@@ -95,7 +111,7 @@ static void EPD_SetRAMMP(void)
     EPD_WR_DATA8(0x00);
 }
 
-static void EPD_SetRAMMA(void)
+void EPD_SetRAMMA(void)
 {
     EPD_WR_REG(0x4E);
     EPD_WR_DATA8(0x00);
@@ -104,7 +120,7 @@ static void EPD_SetRAMMA(void)
     EPD_WR_DATA8(0x01);
 }
 
-static void EPD_SetRAMSP(void)
+void EPD_SetRAMSP(void)
 {
     EPD_WR_REG(0x91);
     EPD_WR_DATA8(0x04);
@@ -118,13 +134,50 @@ static void EPD_SetRAMSP(void)
     EPD_WR_DATA8(0x00);
 }
 
-static void EPD_SetRAMSA(void)
+void EPD_SetRAMSA(void)
 {
     EPD_WR_REG(0xCE);
     EPD_WR_DATA8(0x31);
     EPD_WR_REG(0xCF);
     EPD_WR_DATA8(0x0F);
     EPD_WR_DATA8(0x01);
+}
+
+void EPD_Display_Clear(void)
+{
+    EPD_SetRAMMP();
+    EPD_SetRAMMA();
+    EPD_WR_REG(0x24);
+    for (uint16_t i = 0; i < Gate_BITS; i++) {
+        for (uint16_t j = 0; j < Source_BYTES; j++) {
+            EPD_WR_DATA8(0xFF);
+        }
+    }
+
+    EPD_SetRAMMA();
+    EPD_WR_REG(0x26);
+    for (uint16_t i = 0; i < Gate_BITS; i++) {
+        for (uint16_t j = 0; j < Source_BYTES; j++) {
+            EPD_WR_DATA8(0x00);
+        }
+    }
+
+    EPD_SetRAMSP();
+    EPD_SetRAMSA();
+    EPD_WR_REG(0xA4);
+    for (uint16_t i = 0; i < Gate_BITS; i++) {
+        for (uint16_t j = 0; j < Source_BYTES; j++) {
+            EPD_WR_DATA8(0xFF);
+        }
+    }
+
+    EPD_SetRAMSA();
+    EPD_WR_REG(0xA6);
+    for (uint16_t i = 0; i < Gate_BITS; i++) {
+        for (uint16_t j = 0; j < Source_BYTES; j++) {
+            EPD_WR_DATA8(0x00);
+        }
+    }
 }
 
 void EPD_Display(const uint8_t *ImageBW)

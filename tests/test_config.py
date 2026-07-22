@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import datetime, time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -118,6 +118,60 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             [period.minutes for period in configured.refresh_periods],
             [30, 90, 30],
+        )
+
+    def test_display_profiles_bind_refresh_frequency_and_panels(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "items.csv").write_text(
+                "id,type,text\n1,personal,Walk\n", encoding="utf-8"
+            )
+            path = root / "config.yaml"
+            presentation = (
+                "      panels:\n"
+                "        dashboard:\n"
+                "          template: landscape_1\n"
+                "          slots:\n"
+                "            1: {module: items}\n"
+                "        math:\n"
+                "          template: landscape_1\n"
+                "          slots:\n"
+                "            1: {module: math, type: pattern}\n"
+                "      display_profiles:\n"
+                "        active: {minutes: 15, panels: [dashboard, math]}\n"
+                "        daytime: {minutes: 30, panels: [dashboard]}\n"
+            )
+            content = device_sections(presentation).replace(
+                "      minutes: 60\n"
+                "      active_start: '07:00'\n"
+                "      active_end: '22:00'\n",
+                "      schedule:\n"
+                "        - {start: '07:00', end: '10:00', profile: active}\n"
+                "        - {start: '10:00', end: '17:00', profile: daytime}\n"
+                "        - {start: '17:00', end: '21:00', profile: active}\n",
+            )
+            path.write_text(
+                "font: /tmp/font.otf\nlibrary_dir: .\n" + content,
+                encoding="utf-8",
+            )
+
+            configured = resolved_settings(path)
+
+        self.assertEqual(
+            [period.display_profile for period in configured.refresh_periods],
+            ["active", "daytime", "active"],
+        )
+        self.assertEqual(
+            [period.minutes for period in configured.refresh_periods],
+            [15, 30, 15],
+        )
+        self.assertEqual(
+            len(configured.panels_at(datetime(2026, 7, 22, 9, 0))),
+            2,
+        )
+        self.assertEqual(
+            len(configured.panels_at(datetime(2026, 7, 22, 12, 0))),
+            1,
         )
 
     def test_loads_minimal_config(self) -> None:

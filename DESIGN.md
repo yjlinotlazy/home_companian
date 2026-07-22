@@ -384,23 +384,28 @@ devices:
     profile: crowpanel_579
     channel: home
     refresh:
-      minutes: 30
-      active_start: "07:00"
-      active_end: "22:00"
+      schedule:
+        - {start: "08:00", end: "12:00", profile: mixed}
+        - {start: "12:00", end: "20:00", profile: dashboard_only}
     presentation:
       status_bar: {}
       panels:
-        - template: landscape_3
+        dashboard:
+          template: landscape_3
           slots:
             1: {module: images, collections: "plants,animals"}
             2: {module: items}
             3: {module: chinese, source: select}
-        - template: landscape_1
+        math:
+          template: landscape_1
           slots:
-            1: {module: math, type: game24}
+            1: {module: math, type: games}
+      display_profiles:
+        mixed: {minutes: 20, panels: [dashboard, math]}
+        dashboard_only: {minutes: 40, panels: [dashboard]}
 ```
 
-内置 Device Profile 与用户的 Device Instance 分开保存。不同设备可以选择不同刷新窗口、状态栏、模板和模块；用户只选择 profile，不复制硬件参数。旧的顶层显示配置不再兼容。
+内置 Device Profile 与用户的 Device Instance 分开保存。Display Profile 是另一层概念：它绑定刷新频率和允许轮换的 panel 集合，由时段 schedule 引用。不同设备可以选择不同刷新窗口、状态栏、模板和模块；用户不复制硬件参数。旧的顶层显示配置不再兼容。
 
 设备 ID 只存在于用户配置和由它派生的运行状态中，不等同于型号。多台同型号设备可以使用不同 ID 和同一个 profile。唯一例外是旧固件兼容口 `/display.bin` 固定查找 `wall_panel`；通用接口不要求这个名字。
 
@@ -419,6 +424,19 @@ latin_fonts:
   Noto Sans Mono: /usr/share/fonts/noto/NotoSansMono-Regular.ttf
   霞鹜文楷: /usr/share/fonts/TTF/LXGWWenKai-Medium.ttf
 ```
+
+## 未来方案：外出定位与 Kindle 图片中转
+
+该方案暂不实现，保留以下设计方向：
+
+1. 手机在外通过 VPN 访问 Home Companian，并在用户授权后提交位置。
+2. 服务器根据位置完成计算，只把计算结果用于重新渲染，不把原始坐标写入公开文件。
+3. Kindle 留在家中时继续使用家庭 Wi-Fi 和现有设备接口；Kindle 随身携带时可通过手机热点联网。
+4. 手机浏览器前台手动提交位置最可靠；后台持续定位需要 iOS Shortcuts、Android Tasker 或原生应用。
+
+最小原型可用 Dropbox 作为单向图片中转：服务器覆盖同步目录中的固定 `display.bin`，Kindle 使用带 `dl=1` 的文件共享链接并允许 HTTP 重定向。共享链接由 Dropbox 生成，完整链接本身等同访问密钥；不得写入仓库、示例配置或日志。更新时覆盖同一路径的文件，不先删除再创建。Dropbox 中只保存最终屏幕文件，不保存位置或其他输入数据。
+
+Dropbox 共享链接不是严格的设备认证。若以后需要更强隔离，应改为专用公网 HTTPS 下载入口，仅开放指定设备的 `next` 和可选 `ack` 路由，使用保存在设备本地配置中的 Bearer token；管理网页和位置提交接口仍只通过 VPN 提供。
 
 ## 当前阶段非目标
 

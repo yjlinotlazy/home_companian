@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 import math
@@ -119,6 +120,12 @@ class DisplayService:
         self._next_scene: PreparedScene | None = None
         self._next_scene_key: tuple[object, ...] | None = None
         self._next_scene_forced = False
+        self._preview_panel_lock = Lock()
+        self._preview_panel_queue: list[int] = []
+        self._preview_panel_key: tuple[PanelConfig, ...] | None = None
+        self._last_preview_panel: int | None = None
+        self._selected_preview_lock = Lock()
+        self._selected_previews: OrderedDict[str, RenderedDisplay] = OrderedDict()
         self._current_display_lock = Lock()
         self._current_display = self._load_current_display()
         self._delivery_lock = Lock()
@@ -179,12 +186,8 @@ class DisplayService:
             )
             item = select_scheduled(settings, preview_time)
         elif preview_random:
-            assignment = self._items_assignment(settings)
-            random_assignment = type(assignment)(
-                assignment.slot_id, assignment.module, (("mode", "random"),)
-            )
-            content_id = self.preview_items_module.prepare(settings, now, random_assignment)
-            item = self.preview_items_module.resolve(settings, content_id)
+            prepared = self._prepare_preview_scene(settings, now)
+            return self._render_scene(prepared, settings, display_now)
         else:
             if device:
                 forced_scene = self._consume_forced_scene(settings, now)
@@ -202,7 +205,7 @@ class DisplayService:
                     self._remember_current(rendered)
                 return rendered
             else:
-                assignment = self._items_assignment(settings)
+                assignment = self._items_assignment(settings, now)
                 content_id = self.preview_items_module.prepare(settings, now, assignment)
                 item = self.preview_items_module.resolve(settings, content_id)
 
@@ -215,6 +218,24 @@ class DisplayService:
     def render_current(self) -> RenderedDisplay | None:
         with self._current_display_lock:
             return self._current_display
+
+    def store_selected_preview(self, rendered: RenderedDisplay) -> str:
+        preview_id = rendered.frame.id
+        with self._selected_preview_lock:
+            self._selected_previews[preview_id] = rendered
+            self._selected_previews.move_to_end(preview_id)
+            while len(self._selected_previews) > 16:
+                self._selected_previews.popitem(last=False)
+        return preview_id
+
+    def selected_preview(self, preview_id: str) -> RenderedDisplay:
+        with self._selected_preview_lock:
+            try:
+                rendered = self._selected_previews[preview_id]
+            except KeyError as exc:
+                raise ValueError(f"unknown preview id: {preview_id}") from exc
+            self._selected_previews.move_to_end(preview_id)
+            return rendered
 
     def deliver(self, now: datetime | None = None) -> RenderedDisplay:
         with self._delivery_lock:
@@ -340,7 +361,7 @@ class DisplayService:
         next_at: datetime | None = None,
     ) -> PreparedScene:
         at = next_at or datetime.now()
-        panel = self._items_panel(settings)
+        panel = self._items_panel(settings, at)
         fragments: list[SceneFragment] = []
         for index, assignment in enumerate(panel.slots):
             if assignment.module == ItemsModule.name:
@@ -603,10 +624,51 @@ class DisplayService:
             return scene
 
     def _prepare_scene(self, settings: Settings, at: datetime) -> PreparedScene:
-        panel = random.choice(settings.panels)
+        panel = random.choice(settings.panels_at(at))
+        return self._prepare_panel(settings, at, panel, self.device_modules)
+
+    def _prepare_preview_scene(
+        self,
+        settings: Settings,
+        at: datetime,
+    ) -> PreparedScene:
+        available_panels = settings.panels_at(at)
+        with self._preview_panel_lock:
+            key = available_panels
+            if self._preview_panel_key != key:
+                self._preview_panel_queue = []
+                self._preview_panel_key = key
+                self._last_preview_panel = None
+            if not self._preview_panel_queue:
+                self._preview_panel_queue = list(range(len(available_panels)))
+                random.shuffle(self._preview_panel_queue)
+                if (
+                    len(self._preview_panel_queue) > 1
+                    and self._preview_panel_queue[0] == self._last_preview_panel
+                ):
+                    self._preview_panel_queue[0], self._preview_panel_queue[1] = (
+                        self._preview_panel_queue[1],
+                        self._preview_panel_queue[0],
+                    )
+            panel_index = self._preview_panel_queue.pop(0)
+            self._last_preview_panel = panel_index
+        return self._prepare_panel(
+            settings,
+            at,
+            available_panels[panel_index],
+            self.preview_modules,
+        )
+
+    @staticmethod
+    def _prepare_panel(
+        settings: Settings,
+        at: datetime,
+        panel: PanelConfig,
+        modules: dict[str, Module],
+    ) -> PreparedScene:
         fragments: list[SceneFragment] = []
         for index, assignment in enumerate(panel.slots):
-            module = self.device_modules.get(assignment.module)
+            module = modules.get(assignment.module)
             if module is None:
                 raise ConfigError(f"unknown module: {assignment.module}")
             content_id = module.prepare(settings, at, assignment)
@@ -621,15 +683,15 @@ class DisplayService:
         return PreparedScene(Scene.create(tuple(fragments), at), panel)
 
     @staticmethod
-    def _items_assignment(settings: Settings):
-        for assignment in DisplayService._items_panel(settings).slots:
+    def _items_assignment(settings: Settings, at: datetime):
+        for assignment in DisplayService._items_panel(settings, at).slots:
             if assignment.module == ItemsModule.name:
                 return assignment
         raise ConfigError("selected panel has no items module")
 
     @staticmethod
-    def _items_panel(settings: Settings) -> PanelConfig:
-        for panel in settings.panels:
+    def _items_panel(settings: Settings, at: datetime) -> PanelConfig:
+        for panel in settings.panels_at(at):
             if any(slot.module == ItemsModule.name for slot in panel.slots):
                 return panel
         raise ConfigError("selected presentation has no items module")
@@ -644,6 +706,7 @@ class DisplayService:
             settings.active_start,
             settings.active_end,
             settings.refresh_periods,
+            settings.display_profiles,
             settings.panels,
             settings.mode,
             settings.random_items,

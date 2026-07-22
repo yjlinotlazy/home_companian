@@ -153,25 +153,32 @@ devices:
     profile: crowpanel_579
     channel: home
     refresh:
-      minutes: 60
-      active_start: "08:00"
-      active_end: "20:00"
+      schedule:
+        - {start: "08:00", end: "12:00", profile: mixed}
+        - {start: "12:00", end: "20:00", profile: dashboard_only}
     presentation:
       status_bar:
         center: [{module: solar_term}]
         right: [{module: weekday}]
       panels:
-        - template: landscape_3
+        dashboard:
+          template: landscape_3
           slots:
             1: {module: images, collections: "plants,animals"}
             2: {module: items}
             3: {module: chinese, source: select}
-        - template: landscape_1
+        math:
+          template: landscape_1
           slots:
-            1: {module: math, type: game24}
+            1: {module: math, type: games}
+      display_profiles:
+        mixed: {minutes: 20, panels: [dashboard, math]}
+        dashboard_only: {minutes: 40, panels: [dashboard]}
 ```
 
-Channel 决定选择什么内容。Device 决定使用哪个 profile、订阅哪个 Channel、何时刷新以及如何排版。`presentation.panels` 有多个条目时，服务端把模板和对应模块作为整体随机选择；单个条目则固定使用该排版。完整示例见 [config.example.yaml](config.example.yaml)。
+Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力；`presentation.display_profiles` 则把刷新分钟数和允许轮换的命名 panels 绑定，`refresh.schedule` 按时段引用它。未配置 display profiles 时，旧的固定刷新窗口和 panel 列表仍兼容。完整示例见 [config.example.yaml](config.example.yaml)。
+
+数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
 
 主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧缩略图；包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 

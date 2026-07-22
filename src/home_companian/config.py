@@ -53,6 +53,7 @@ class RefreshPeriod:
     start: time
     end: time
     minutes: int
+    display_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,10 +95,18 @@ DEFAULT_REWARD = RewardConfig("toy", "玩具", 50, 25)
 class PresentationConfig:
     panels: tuple[PanelConfig, ...]
     status_bar: StatusBarConfig
+    display_profiles: tuple[DisplayProfile, ...] = ()
 
     @property
     def panel(self) -> PanelConfig:
         return self.panels[0]
+
+
+@dataclass(frozen=True)
+class DisplayProfile:
+    id: str
+    minutes: int
+    panels: tuple[PanelConfig, ...]
 
 
 @dataclass(frozen=True)
@@ -131,12 +140,38 @@ class Settings:
     panels: tuple[PanelConfig, ...]
     status_bar: StatusBarConfig
     refresh_periods: tuple[RefreshPeriod, ...] = ()
+    display_profiles: tuple[DisplayProfile, ...] = ()
     reward: RewardConfig = DEFAULT_REWARD
     checklist_groups: tuple[ChecklistGroup, ...] = ()
 
     @property
     def panel(self) -> PanelConfig:
         return self.panels[0]
+
+    def panels_at(self, at: datetime) -> tuple[PanelConfig, ...]:
+        if not self.display_profiles:
+            return self.panels
+        selected_period = next(
+            (
+                period
+                for period in self.refresh_periods
+                if period.start <= at.time() < period.end
+            ),
+            None,
+        )
+        if (
+            selected_period is None
+            and self.refresh_periods
+            and at.time() == self.refresh_periods[-1].end
+        ):
+            selected_period = self.refresh_periods[-1]
+        if selected_period is None:
+            selected_period = self.refresh_periods[0]
+        return next(
+            profile.panels
+            for profile in self.display_profiles
+            if profile.id == selected_period.display_profile
+        )
 
 
 @dataclass(frozen=True)
@@ -189,6 +224,7 @@ class Config:
             panels=device.presentation.panels,
             status_bar=device.presentation.status_bar,
             refresh_periods=device.refresh.periods,
+            display_profiles=device.presentation.display_profiles,
             reward=self.reward,
             checklist_groups=self.checklist_groups,
         )
@@ -439,6 +475,105 @@ def _load_status_bar(root: dict[str, Any]) -> StatusBarConfig:
     return StatusBarConfig(groups["left"], groups["center"], groups["right"])
 
 
+def _load_presentation(device_id: str, device: dict[str, Any]) -> PresentationConfig:
+    label = f"devices.{device_id}.presentation"
+    presentation = _mapping(device.get("presentation"), label)
+    raw_display_profiles = presentation.get("display_profiles")
+    raw_panels = presentation.get("panels")
+
+    if raw_display_profiles is None:
+        if raw_panels is None:
+            panels = (_load_panel(presentation),)
+        else:
+            if not isinstance(raw_panels, list) or not raw_panels:
+                raise ConfigError(f"{label}.panels must be a non-empty list")
+            panels = tuple(
+                _load_panel({"panel": raw_panel}) for raw_panel in raw_panels
+            )
+        display_profiles: tuple[DisplayProfile, ...] = ()
+    else:
+        if "panel" in presentation:
+            raise ConfigError(
+                f"{label}.display_profiles cannot be mixed with legacy panel"
+            )
+        panel_catalog = _mapping(raw_panels, f"{label}.panels")
+        if not panel_catalog:
+            raise ConfigError(
+                f"{label}.panels must be a non-empty mapping when using display_profiles"
+            )
+        loaded_panels: dict[str, PanelConfig] = {}
+        for raw_panel_id, raw_panel in panel_catalog.items():
+            if not isinstance(raw_panel_id, str) or not raw_panel_id.strip():
+                raise ConfigError(f"{label}.panel ids must be non-empty text")
+            panel_id = raw_panel_id.strip()
+            if panel_id in loaded_panels:
+                raise ConfigError(f"duplicate {label}.panel id: {panel_id}")
+            loaded_panels[panel_id] = _load_panel({"panel": raw_panel})
+
+        profile_mapping = _mapping(
+            raw_display_profiles,
+            f"{label}.display_profiles",
+        )
+        if not profile_mapping:
+            raise ConfigError(f"{label}.display_profiles must not be empty")
+        loaded_profiles: list[DisplayProfile] = []
+        for raw_profile_id, raw_profile in profile_mapping.items():
+            if not isinstance(raw_profile_id, str) or not raw_profile_id.strip():
+                raise ConfigError(f"{label}.display profile ids must be non-empty text")
+            profile_id = raw_profile_id.strip()
+            profile = _mapping(
+                raw_profile,
+                f"{label}.display_profiles.{profile_id}",
+            )
+            extra_keys = set(profile) - {"minutes", "panels"}
+            if extra_keys:
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id} has unknown key: "
+                    f"{sorted(extra_keys)[0]}"
+                )
+            minutes = profile.get("minutes")
+            if type(minutes) is not int or minutes <= 0:
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id}.minutes must be positive"
+                )
+            panel_ids = profile.get("panels")
+            if (
+                not isinstance(panel_ids, list)
+                or not panel_ids
+                or not all(isinstance(panel_id, str) for panel_id in panel_ids)
+            ):
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id}.panels must be a non-empty list"
+                )
+            if len(set(panel_ids)) != len(panel_ids):
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id}.panels must not contain duplicates"
+                )
+            unknown_panel_ids = [
+                panel_id for panel_id in panel_ids if panel_id not in loaded_panels
+            ]
+            if unknown_panel_ids:
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id} references unknown panel: "
+                    f"{unknown_panel_ids[0]}"
+                )
+            loaded_profiles.append(
+                DisplayProfile(
+                    profile_id,
+                    minutes,
+                    tuple(loaded_panels[panel_id] for panel_id in panel_ids),
+                )
+            )
+        panels = tuple(loaded_panels.values())
+        display_profiles = tuple(loaded_profiles)
+
+    return PresentationConfig(
+        panels=panels,
+        status_bar=_load_status_bar(presentation),
+        display_profiles=display_profiles,
+    )
+
+
 def _load_channel(
     channel_id: str,
     raw: Any,
@@ -519,10 +654,20 @@ def _load_device(
     if channel not in channel_ids:
         raise ConfigError(f"device {device_id} references unknown channel: {channel}")
 
+    presentation_config = _load_presentation(device_id, device)
+    display_profiles = {
+        display_profile.id: display_profile
+        for display_profile in presentation_config.display_profiles
+    }
+
     refresh = _mapping(device.get("refresh"), f"devices.{device_id}.refresh")
     raw_periods = refresh.get("schedule")
     periods: tuple[RefreshPeriod, ...] = ()
     if raw_periods is None:
+        if display_profiles:
+            raise ConfigError(
+                f"devices.{device_id}.refresh.schedule is required with display_profiles"
+            )
         minutes = refresh.get("minutes")
         if not isinstance(minutes, int) or minutes <= 0:
             raise ConfigError(f"devices.{device_id}.refresh.minutes must be positive")
@@ -555,9 +700,34 @@ def _load_device(
             period = _mapping(raw_period, label)
             start = _config_time(period.get("start"), f"{label}.start", "")
             end = _config_time(period.get("end"), f"{label}.end", "")
-            period_minutes = period.get("minutes")
-            if not isinstance(period_minutes, int) or period_minutes <= 0:
-                raise ConfigError(f"{label}.minutes must be positive")
+            if display_profiles:
+                if "minutes" in period:
+                    raise ConfigError(
+                        f"{label}.minutes belongs in its display profile"
+                    )
+                display_profile_id = _required_text(period, "profile", label)
+                try:
+                    period_minutes = display_profiles[display_profile_id].minutes
+                except KeyError as exc:
+                    raise ConfigError(
+                        f"{label} references unknown display profile: "
+                        f"{display_profile_id}"
+                    ) from exc
+                extra_keys = set(period) - {"start", "end", "profile"}
+            else:
+                if "profile" in period:
+                    raise ConfigError(
+                        f"{label}.profile requires presentation.display_profiles"
+                    )
+                display_profile_id = None
+                period_minutes = period.get("minutes")
+                if not isinstance(period_minutes, int) or period_minutes <= 0:
+                    raise ConfigError(f"{label}.minutes must be positive")
+                extra_keys = set(period) - {"start", "end", "minutes"}
+            if extra_keys:
+                raise ConfigError(
+                    f"{label} has unknown key: {sorted(extra_keys)[0]}"
+                )
             duration_minutes = (
                 datetime.combine(date.min, end) - datetime.combine(date.min, start)
             ).total_seconds() // 60
@@ -569,34 +739,20 @@ def _load_device(
                 raise ConfigError(
                     f"{label}.start must equal the previous period end"
                 )
-            loaded_periods.append(RefreshPeriod(start, end, period_minutes))
+            loaded_periods.append(
+                RefreshPeriod(start, end, period_minutes, display_profile_id)
+            )
         periods = tuple(loaded_periods)
         minutes = periods[0].minutes
         active_start = periods[0].start
         active_end = periods[-1].end
 
-    presentation = _mapping(
-        device.get("presentation"),
-        f"devices.{device_id}.presentation",
-    )
-    raw_panels = presentation.get("panels")
-    if raw_panels is None:
-        panels = (_load_panel(presentation),)
-    else:
-        if not isinstance(raw_panels, list) or not raw_panels:
-            raise ConfigError(f"devices.{device_id}.presentation.panels must be a non-empty list")
-        panels = tuple(
-            _load_panel({"panel": raw_panel}) for raw_panel in raw_panels
-        )
     return DeviceConfig(
         id=device_id,
         profile=profile,
         channel=channel,
         refresh=RefreshConfig(minutes, active_start, active_end, periods),
-        presentation=PresentationConfig(
-            panels=panels,
-            status_bar=_load_status_bar(presentation),
-        ),
+        presentation=presentation_config,
     )
 
 

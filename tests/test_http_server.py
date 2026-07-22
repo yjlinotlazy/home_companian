@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import Mock
 
 from datetime import time
 from datetime import datetime
+from http import HTTPStatus
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,11 +20,13 @@ from home_companian.http_server import (
     device_preview_png,
     index_html,
     is_random_preview,
+    make_handler,
     parse_item_id,
     parse_checklist_route,
     parse_reward_route,
     parse_device_route,
     parse_font_name,
+    parse_preview_id,
     parse_preview_time,
 )
 from home_companian.service import RewardStatus
@@ -154,6 +158,35 @@ class HttpServerTests(unittest.TestCase):
         for query in ("item=0", "item=-1", "item=nope"):
             with self.subTest(query=query), self.assertRaises(ValueError):
                 parse_item_id(query)
+
+    def test_parses_selected_preview_id(self) -> None:
+        preview_id = "a" * 64
+        self.assertEqual(parse_preview_id(f"id={preview_id}"), preview_id)
+        for query in ("", "id=short", f"id={'A' * 64}"):
+            with self.subTest(query=query), self.assertRaises(ValueError):
+                parse_preview_id(query)
+
+    def test_rejects_incomplete_json_body(self) -> None:
+        handler_type = make_handler(SimpleNamespace(), SimpleNamespace())
+        handler = handler_type.__new__(handler_type)
+        handler.headers = {"Content-Length": "2"}
+        handler.rfile = BytesIO(b"")
+
+        with self.assertRaisesRegex(ValueError, "incomplete JSON body"):
+            handler._read_json()
+
+    def test_send_ignores_disconnected_client(self) -> None:
+        handler_type = make_handler(SimpleNamespace(), SimpleNamespace())
+        handler = handler_type.__new__(handler_type)
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler.wfile = SimpleNamespace(write=Mock(side_effect=BrokenPipeError))
+        handler.close_connection = False
+
+        handler._send(HTTPStatus.BAD_REQUEST, "text/plain", b"bad request")
+
+        self.assertTrue(handler.close_connection)
 
     def test_parses_font_name(self) -> None:
         self.assertEqual(parse_font_name("name=%E6%96%87%E6%A5%B7"), "文楷")

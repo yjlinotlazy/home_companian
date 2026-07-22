@@ -202,10 +202,14 @@ async function preview(section, query) {{
   const response = await fetch(devicePath(section, 'preview-selection') + '?' + query);
   if (!response.ok) throw new Error(await response.text());
   const selection = await response.json();
-  section.dataset.previewItemId = selection.item_id;
   section.querySelector('[data-current-preview]').src = refreshed(selection.image_url);
-  section.querySelector('[data-action="change"]').disabled = false;
-  section.querySelector('[data-change-status]').textContent = '仅预览';
+  const canChange = Number.isInteger(selection.item_id) && selection.item_id > 0;
+  if (canChange) section.dataset.previewItemId = selection.item_id;
+  else delete section.dataset.previewItemId;
+  section.querySelector('[data-action="change"]').disabled = !canChange;
+  section.querySelector('[data-change-status]').textContent = canChange
+    ? '仅预览'
+    : '仅预览（此布局不能更改）';
 }}
 
 async function loadNextRefresh(section) {{
@@ -351,6 +355,16 @@ def parse_item_id(query: str) -> int | None:
     return item_id
 
 
+def parse_preview_id(query: str) -> str:
+    values = parse_qs(query).get("id")
+    preview_id = values[0] if values else ""
+    if len(preview_id) != 64 or any(
+        character not in "0123456789abcdef" for character in preview_id
+    ):
+        raise ValueError("preview id must be a lowercase SHA-256 hash")
+    return preview_id
+
+
 def parse_font_name(query: str) -> str | None:
     values = parse_qs(query).get("name")
     if not values or not values[0].strip():
@@ -425,6 +439,9 @@ def make_handler(
                 selection_device_id = parse_device_route(
                     request.path, "preview-selection"
                 )
+                selected_preview_device_id = parse_device_route(
+                    request.path, "selected-preview.png"
+                )
                 next_refresh_device_id = parse_device_route(
                     request.path, "next-refresh"
                 )
@@ -467,19 +484,27 @@ def make_handler(
                         preview_time=preview_time,
                         preview_random=is_random_preview(request.query),
                     )
-                    image_query = {"item": rendered.item_id}
-                    if preview_time is not None:
-                        image_query["time"] = preview_time.strftime("%H:%M")
+                    preview_id = device_service.store_selected_preview(rendered)
                     encoded_id = quote(selection_device_id, safe="")
                     self._send_json(
                         HTTPStatus.OK,
                         {
-                            "item_id": rendered.item_id,
+                            "item_id": rendered.item_id or None,
                             "image_url": (
-                                f"/v1/devices/{encoded_id}/preview.png?"
-                                f"{urlencode(image_query)}"
+                                f"/v1/devices/{encoded_id}/selected-preview.png?"
+                                f"{urlencode({'id': preview_id})}"
                             ),
                         },
+                    )
+                elif selected_preview_device_id is not None:
+                    device_service = device_services.get(selected_preview_device_id)
+                    rendered = device_service.selected_preview(
+                        parse_preview_id(request.query)
+                    )
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
                     )
                 elif next_refresh_device_id is not None:
                     device_service = device_services.get(next_refresh_device_id)
@@ -671,8 +696,11 @@ def make_handler(
                 raise ValueError("invalid Content-Length") from exc
             if length <= 0 or length > 64 * 1024:
                 raise ValueError("JSON body must be provided")
+            payload = self.rfile.read(length)
+            if len(payload) != length:
+                raise ValueError("incomplete JSON body")
             try:
-                value = json.loads(self.rfile.read(length))
+                value = json.loads(payload)
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise ValueError("invalid JSON body") from exc
             if not isinstance(value, dict):
@@ -693,14 +721,17 @@ def make_handler(
             body: bytes,
             headers: dict[str, str] | None = None,
         ) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            for name, value in (headers or {}).items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
 
     return Handler
 
