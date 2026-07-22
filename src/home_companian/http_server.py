@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from .checklists import ChecklistItem
 from .config import ConfigError, FontChoice, load_config
 from .devices import get_device_profile
+from .display_modes import TASKBOARD_MODE, TREASURE_HUNT_MODE
 from .service import DisplayService, RenderedDisplay, RewardStatus
 
 
@@ -44,6 +45,30 @@ def reward_payload(status: RewardStatus) -> dict[str, object]:
         "cost": status.reward.cost,
         "score": status.score,
         "redeemable": status.redeemable,
+    }
+
+
+def treasure_hunt_payload(
+    service: DisplayService,
+    mode: str = TASKBOARD_MODE,
+) -> dict[str, object]:
+    hunt = service.treasure_hunt()
+    return {
+        "background": hunt.background.name,
+        "texts": list(hunt.texts),
+        "completed": list(hunt.completed),
+        "mode": mode,
+        "backgrounds": [
+            {
+                "name": background.name,
+                "image_url": (
+                    "/v1/treasure-hunt/background?"
+                    + urlencode({"name": background.name})
+                ),
+                "text_boxes": [list(box) for box in background.boxes],
+            }
+            for background in service.treasure_hunt_backgrounds()
+        ],
     }
 
 
@@ -93,12 +118,23 @@ def index_html(
         if device.profile_id.startswith("kindle"):
             refresh_controls = """<button type="button" data-action="refresh-rendered">手动刷新</button>
       <img data-next-preview alt="Kindle rendered image preview">"""
+            mode_controls = """<div class="mode-controls">
+      <label>当前模式 <select data-display-mode>
+        <option value="taskboard">任务板</option>
+        <option value="treasure_hunt">寻宝游戏</option>
+      </select></label>
+      <button type="button" data-action="apply-display-mode">确定</button>
+      <span data-display-mode-status></span>
+    </div>
+    <h3 data-mode-section-title="taskboard">任务板</h3>"""
         else:
             refresh_controls = f"""<span>下次刷新：<span data-next-refresh-time>加载中</span></span>
       <img data-next-preview alt="{label} next frame preview">"""
+            mode_controls = ""
         return f"""<section class="device-section" data-device-id="{device_id}"
-         style="--device-width:{device.width}px">
+         style="--device-width:{device.width}px;--preview-width:{device.width // 2}px">
   <h2>{label} <small>{device_id}</small></h2>
+  {mode_controls}
   <div class="display-layout">
     <div class="display-main">
       <img class="device-preview" data-current-preview
@@ -156,22 +192,61 @@ def index_html(
   <span id="latin-font-status"></span></div>
 </div>
 </section>"""
+    treasure_hunt_inputs = "".join(
+        f'<textarea data-treasure-text="{index}" maxlength="200" '
+        f'aria-label="线索 {index + 1}"></textarea>'
+        f'<img data-treasure-check="{index}" hidden alt="">'
+        f'<label class="treasure-completed" data-treasure-completed-label="{index}">'
+        f'<input type="checkbox" data-treasure-completed="{index}">完成</label>'
+        for index in range(6)
+    )
+    treasure_hunt_controls = f"""<section class="treasure-hunt-controls">
+<h2 data-mode-section-title="treasure_hunt">寻宝游戏</h2>
+<label>背景图片 <select data-treasure-background></select></label>
+<div class="treasure-hunt-layout">
+  <div class="treasure-hunt-preview" data-treasure-preview>
+    <img data-treasure-image alt="寻宝游戏背景">
+    {treasure_hunt_inputs}
+  </div>
+  <aside class="treasure-rendered-preview">
+    <img data-treasure-rendered-preview src="/v1/treasure-hunt/preview.png"
+         width="300" height="400" alt="Kindle 寻宝游戏预览">
+  </aside>
+</div>
+<div class="treasure-hunt-actions">
+  <button type="button" data-treasure-save>保存</button>
+  <span data-treasure-status></span>
+</div>
+</section>"""
 
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Home Companian</title>
 <style>
-.display-layout {{ display:grid; grid-template-columns:minmax(0,var(--device-width)) 160px; gap:1rem; align-items:start; }}
+.display-layout {{ display:grid; grid-template-columns:minmax(0,var(--device-width)) var(--preview-width); gap:1rem; align-items:start; }}
 .display-main {{ max-width:var(--device-width); }}
 .controls-grid {{ display:grid; grid-template-columns:minmax(0,1fr); gap:.75rem; margin-top:1rem; }}
 .controls-grid > div {{ min-width:0; }}
-.next-refresh {{ display:grid; gap:.5rem; }}
-.next-refresh img {{ width:160px; height:auto; border:1px solid #aaa; }}
+.next-refresh {{ display:grid; gap:.5rem; width:var(--preview-width); }}
+.next-refresh img {{ width:100%; height:auto; border:1px solid #aaa; }}
 .device-divider {{ margin:2.5rem 0; border:0; border-top:1px solid #999; }}
 .device-preview {{ display:block; width:100%; height:auto; border:1px solid #888; }}
 .device-section small {{ font-size:.55em; font-weight:normal; color:#555; }}
+.mode-controls {{ display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin:.5rem 0; }}
+.mode-controls label, .mode-controls select, .mode-controls button {{ font:inherit; font-size:1rem; line-height:1.3; }}
 .font-controls {{ margin-top:2.5rem; }}
 .checklist-controls {{ margin-top:2rem; width:fit-content; max-width:100%; }}
+.treasure-hunt-controls {{ margin-top:2rem; width:min(916px,100%); }}
+.treasure-hunt-layout {{ display:grid; grid-template-columns:minmax(0,600px) 300px; gap:1rem; align-items:start; }}
+.treasure-hunt-preview {{ position:relative; width:100%; margin-top:.75rem; }}
+.treasure-hunt-preview img {{ display:block; width:100%; height:auto; }}
+.treasure-hunt-preview textarea {{ position:absolute; box-sizing:border-box; resize:none; padding:.3rem; border:1px dashed #555; background:rgba(255,255,255,.72); font:clamp(.65rem,2vw,1rem)/1.2 sans-serif; }}
+.treasure-hunt-preview img[data-treasure-check] {{ position:absolute; box-sizing:border-box; object-fit:contain; pointer-events:none; }}
+.treasure-hunt-preview img[data-treasure-check][hidden] {{ display:none !important; }}
+.treasure-completed {{ position:absolute; transform:translate(-100%,-100%); padding:.15rem .3rem; white-space:nowrap; background:rgba(255,255,255,.82); font-size:.8rem; }}
+.treasure-hunt-actions {{ display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-top:.75rem; }}
+.treasure-rendered-preview {{ margin-top:.75rem; }}
+.treasure-rendered-preview img {{ display:block; width:300px; height:auto; border:1px solid #aaa; }}
 .checklist-grid {{ display:grid; grid-template-columns:repeat(3,minmax(140px,190px)); gap:.5rem; justify-content:start; }}
 .checklist-grid fieldset {{ display:grid; gap:.3rem; margin:0; padding:.35rem .55rem .5rem; }}
 .checklist-grid label {{ white-space:nowrap; }}
@@ -179,6 +254,8 @@ def index_html(
 .reward-control progress {{ width:150px; }}
 @media (max-width: 760px) {{
   .display-layout {{ grid-template-columns:minmax(0,1fr); }}
+  .next-refresh {{ width:min(var(--preview-width),100%); }}
+  .treasure-hunt-layout {{ grid-template-columns:minmax(0,1fr); }}
   .checklist-grid {{ grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }}
 }}
 </style></head>
@@ -186,6 +263,7 @@ def index_html(
   <h1>Home Companian</h1>
   {device_sections}
   {checklist_controls}
+  {treasure_hunt_controls}
   {font_controls}
 <script>
 const nextRefreshTimers = new Map();
@@ -196,6 +274,20 @@ function devicePath(section, action) {{
 
 function refreshed(url) {{
   return url + (url.includes('?') ? '&' : '?') + 'refresh=' + Date.now();
+}}
+
+function updateDisplayModeUI(mode) {{
+  document.querySelectorAll('[data-display-mode]').forEach(select => {{
+    select.value = mode;
+  }});
+  document.querySelectorAll('[data-mode-section-title]').forEach(title => {{
+    const label = title.dataset.modeSectionTitle === 'taskboard'
+      ? '任务板'
+      : '寻宝游戏';
+    title.textContent = title.dataset.modeSectionTitle === mode
+      ? label + '（当前模式）'
+      : label;
+  }});
 }}
 
 async function preview(section, query) {{
@@ -247,6 +339,24 @@ document.querySelectorAll('.device-section').forEach(section => {{
   const refreshButton = section.querySelector('[data-action="refresh-rendered"]');
   if (refreshButton) {{
     refreshButton.addEventListener('click', () => refreshRendered(section));
+  }}
+  const modeButton = section.querySelector('[data-action="apply-display-mode"]');
+  if (modeButton) {{
+    modeButton.addEventListener('click', async () => {{
+      const mode = section.querySelector('[data-display-mode]').value;
+      const status = section.querySelector('[data-display-mode-status]');
+      modeButton.disabled = true;
+      try {{
+        await selectTreasureMode(mode);
+        updateDisplayModeUI(mode);
+        status.textContent = '已切换';
+        document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+      }} catch (error) {{
+        status.textContent = error.message;
+      }} finally {{
+        modeButton.disabled = false;
+      }}
+    }});
   }}
   const randomButton = section.querySelector('[data-action="random-preview"]');
   if (randomButton) {{
@@ -322,6 +432,122 @@ document.querySelectorAll('[data-font-apply]').forEach(button => {{
     document.querySelectorAll('.device-section').forEach(loadNextRefresh);
   }});
 }});
+
+let treasureBackgrounds = [];
+
+function applyTreasureBackground(name) {{
+  const background = treasureBackgrounds.find(candidate => candidate.name === name);
+  if (!background) return;
+  document.querySelector('[data-treasure-image]').src = refreshed(background.image_url);
+  background.text_boxes.forEach((box, index) => {{
+    const input = document.querySelector('[data-treasure-text="' + index + '"]');
+    const check = document.querySelector('[data-treasure-check="' + index + '"]');
+    const label = document.querySelector('[data-treasure-completed-label="' + index + '"]');
+    input.style.left = (box[0] * 100) + '%';
+    input.style.top = (box[1] * 100) + '%';
+    input.style.width = (box[2] * 100) + '%';
+    input.style.height = (box[3] * 100) + '%';
+    check.src = '/v1/treasure-hunt/check.png';
+    check.style.left = ((box[0] + box[2] / 2 - 0.14) * 100) + '%';
+    check.style.top = ((box[1] + box[3] / 2 - 0.09) * 100) + '%';
+    check.style.width = '28%';
+    check.style.height = '18%';
+    label.style.left = ((box[0] + box[2]) * 100) + '%';
+    label.style.top = ((box[1] + box[3]) * 100) + '%';
+  }});
+}}
+
+async function loadTreasureHunt() {{
+  const status = document.querySelector('[data-treasure-status]');
+  try {{
+    const response = await fetch('/v1/treasure-hunt');
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    treasureBackgrounds = result.backgrounds;
+    const select = document.querySelector('[data-treasure-background]');
+    select.replaceChildren(...treasureBackgrounds.map(background => {{
+      const option = document.createElement('option');
+      option.value = background.name;
+      option.textContent = background.name;
+      return option;
+    }}));
+    select.value = result.background;
+    result.texts.forEach((text, index) => {{
+      document.querySelector('[data-treasure-text="' + index + '"]').value = text;
+      const completed = document.querySelector('[data-treasure-completed="' + index + '"]');
+      completed.checked = result.completed[index];
+      document.querySelector('[data-treasure-check="' + index + '"]').hidden = !completed.checked;
+    }});
+    applyTreasureBackground(result.background);
+    updateDisplayModeUI(result.mode);
+    status.textContent = '';
+  }} catch (error) {{
+    status.textContent = error.message;
+  }}
+}}
+
+document.querySelector('[data-treasure-background]').addEventListener('change', event => {{
+  applyTreasureBackground(event.target.value);
+}});
+
+async function saveTreasureHunt() {{
+  const response = await fetch('/v1/treasure-hunt', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{
+      background: document.querySelector('[data-treasure-background]').value,
+      texts: Array.from(document.querySelectorAll('[data-treasure-text]'))
+        .map(input => input.value),
+      completed: Array.from(document.querySelectorAll('[data-treasure-completed]'))
+        .map(input => input.checked)
+    }})
+  }});
+  if (!response.ok) throw new Error(await response.text());
+  document.querySelector('[data-treasure-rendered-preview]').src = refreshed(
+    '/v1/treasure-hunt/preview.png'
+  );
+}}
+
+async function selectTreasureMode(mode) {{
+  const response = await fetch('/v1/treasure-hunt/mode', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{mode}})
+  }});
+  if (!response.ok) throw new Error(await response.text());
+}}
+
+document.querySelector('[data-treasure-save]').addEventListener('click', async () => {{
+    const status = document.querySelector('[data-treasure-status]');
+    try {{
+      await saveTreasureHunt();
+      status.textContent = '已保存';
+      document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+    }} catch (error) {{
+      status.textContent = error.message;
+    }}
+}});
+
+document.querySelectorAll('[data-treasure-completed]').forEach(checkbox => {{
+  checkbox.addEventListener('change', async () => {{
+    const status = document.querySelector('[data-treasure-status]');
+    const checkImage = document.querySelector(
+      '[data-treasure-check="' + checkbox.dataset.treasureCompleted + '"]'
+    );
+    checkImage.hidden = !checkbox.checked;
+    try {{
+      await saveTreasureHunt();
+      status.textContent = '完成状态已保存';
+      document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+    }} catch (error) {{
+      checkbox.checked = !checkbox.checked;
+      checkImage.hidden = !checkbox.checked;
+      status.textContent = error.message;
+    }}
+  }});
+}});
+
+loadTreasureHunt();
 </script>
 </body>
 </html>
@@ -423,6 +649,47 @@ class DeviceServices:
         configured = load_config(self.config_path)
         for device in configured.devices:
             self.get(device.id).refresh_prepared_checklists()
+
+    def refresh_prepared_treasure_hunts(self) -> None:
+        configured = load_config(self.config_path)
+        for device in configured.devices:
+            self.get(device.id).refresh_prepared_treasure_hunts()
+
+    def kindle_mode(self) -> str:
+        configured = load_config(self.config_path)
+        kindle = next(
+            (
+                device
+                for device in configured.devices
+                if device.profile.startswith("kindle_")
+            ),
+            None,
+        )
+        return TASKBOARD_MODE if kindle is None else self.get(kindle.id).display_mode()
+
+    def select_kindles_mode(self, mode: str) -> tuple[str, ...]:
+        configured = load_config(self.config_path)
+        selected: list[str] = []
+        for device in configured.devices:
+            if not device.profile.startswith("kindle_"):
+                continue
+            self.get(device.id).select_display_mode(mode)
+            selected.append(device.id)
+        return tuple(selected)
+
+    def treasure_hunt_preview(self) -> RenderedDisplay:
+        configured = load_config(self.config_path)
+        kindle = next(
+            (
+                device
+                for device in configured.devices
+                if device.profile.startswith("kindle_")
+            ),
+            None,
+        )
+        if kindle is None:
+            raise ValueError("treasure hunt preview requires a Kindle device")
+        return self.get(kindle.id).render_treasure_hunt_preview()
 
 
 def make_handler(
@@ -547,6 +814,27 @@ def make_handler(
                             ),
                         },
                     )
+                elif request.path == "/v1/treasure-hunt":
+                    self._send_json(
+                        HTTPStatus.OK,
+                        treasure_hunt_payload(service, device_services.kindle_mode()),
+                    )
+                elif request.path == "/v1/treasure-hunt/background":
+                    names = parse_qs(request.query).get("name")
+                    if not names or not names[0]:
+                        raise ValueError("treasure hunt background must be provided")
+                    path = service.treasure_hunt_background_path(names[0])
+                    self._send(HTTPStatus.OK, "image/png", path.read_bytes())
+                elif request.path == "/v1/treasure-hunt/check.png":
+                    path = service.treasure_hunt_check_path()
+                    self._send(HTTPStatus.OK, "image/png", path.read_bytes())
+                elif request.path == "/v1/treasure-hunt/preview.png":
+                    rendered = device_services.treasure_hunt_preview()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                    )
                 elif request.path == "/":
                     config = service.config()
                     settings = config.for_device(config.default_device)
@@ -668,6 +956,29 @@ def make_handler(
                         HTTPStatus.OK,
                         {"reward": reward_payload(status)},
                     )
+                elif request.path == "/v1/treasure-hunt/mode":
+                    body = self._read_json()
+                    mode = body.get("mode")
+                    if mode not in {TASKBOARD_MODE, TREASURE_HUNT_MODE}:
+                        raise ValueError("mode must be taskboard or treasure_hunt")
+                    devices = device_services.select_kindles_mode(mode)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"mode": mode, "devices": devices},
+                    )
+                elif request.path == "/v1/treasure-hunt":
+                    body = self._read_json()
+                    service.save_treasure_hunt(
+                        body.get("background"),
+                        body.get("texts"),
+                        body.get("completed"),
+                    )
+                    device_services.refresh_prepared_treasure_hunts()
+                    payload = treasure_hunt_payload(
+                        service,
+                        device_services.kindle_mode(),
+                    )
+                    self._send_json(HTTPStatus.OK, payload)
                 elif request.path == "/font":
                     group = parse_qs(request.query).get("group", [None])[0]
                     if group is None:

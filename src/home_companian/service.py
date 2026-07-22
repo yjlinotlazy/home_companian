@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 import math
 from pathlib import Path
@@ -24,8 +24,13 @@ from .config import (
     Settings,
     load_config,
 )
-from .domain import PanelConfig
-from .devices import get_device_profile
+from .display_modes import (
+    TASKBOARD_MODE,
+    TREASURE_HUNT_MODE,
+    DisplayModeStore,
+)
+from .domain import PanelConfig, SlotAssignment
+from .devices import KINDLE_6_167PPI, get_device_profile
 from .forge.engine import Forge
 from .forge.models import Frame, Presentation, Scene, SceneFragment
 from .modules import (
@@ -36,7 +41,9 @@ from .modules import (
     ItemsModule,
     MathModule,
     Module,
+    TreasureHuntModule,
 )
+from .treasure_hunt import TreasureHunt, TreasureHuntBackground, TreasureHuntStore
 from .selection import RandomSelector, select_scheduled
 from .status_modules import (
     DateModule,
@@ -90,6 +97,9 @@ class DisplayService:
                 f"~/.local/state/home_companian/{filename}"
             ).expanduser()
         self.current_display_path = current_display_path
+        self.display_mode_store = DisplayModeStore(
+            self.current_display_path.parent / f"mode-{self.device_id}.yaml"
+        )
         self.device_items_module = ItemsModule(RandomSelector())
         self.preview_items_module = ItemsModule(RandomSelector())
         self.device_modules: dict[str, Module] = {
@@ -99,6 +109,7 @@ class DisplayService:
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
+            "treasure_hunt": TreasureHuntModule(),
         }
         self.preview_modules: dict[str, Module] = {
             "items": self.preview_items_module,
@@ -107,6 +118,7 @@ class DisplayService:
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
+            "treasure_hunt": TreasureHuntModule(),
         }
         self.status_modules: dict[str, StatusModule] = {
             "date": DateModule(),
@@ -130,6 +142,7 @@ class DisplayService:
         self._current_display = self._load_current_display()
         self._delivery_lock = Lock()
         self._pending_display: RenderedDisplay | None = None
+        self._pending_display_key: tuple[object, ...] | None = None
         self._last_ack: tuple[str, str] | None = None
 
     def config(self) -> Config:
@@ -163,6 +176,11 @@ class DisplayService:
     ) -> RenderedDisplay:
         settings = self.settings()
         now = now or datetime.now()
+        if device and self.display_mode(now) == TREASURE_HUNT_MODE:
+            rendered = self._render_treasure_hunt(settings, now)
+            if remember_device:
+                self._remember_current(rendered)
+            return rendered
         display_now = now
         items = {item.id: item for item in settings.items}
 
@@ -238,13 +256,16 @@ class DisplayService:
             return rendered
 
     def deliver(self, now: datetime | None = None) -> RenderedDisplay:
+        now = now or datetime.now()
         with self._delivery_lock:
-            if self._pending_display is None:
+            key = self._delivery_key(now)
+            if self._pending_display is None or self._pending_display_key != key:
                 self._pending_display = self.render(
                     device=True,
                     remember_device=False,
                     now=now,
                 )
+                self._pending_display_key = key
             return self._pending_display
 
     def refresh_delivery(self, now: datetime | None = None) -> RenderedDisplay:
@@ -257,6 +278,7 @@ class DisplayService:
                 now=now,
             )
             self._pending_display = rendered
+            self._pending_display_key = self._delivery_key(now or datetime.now())
             self._last_ack = None
             return rendered
 
@@ -271,6 +293,7 @@ class DisplayService:
             if status == "displayed":
                 self._remember_current(self._pending_display)
                 self._pending_display = None
+                self._pending_display_key = None
             self._last_ack = (frame_id, status)
 
     def _remember_current(self, rendered: RenderedDisplay) -> None:
@@ -293,18 +316,29 @@ class DisplayService:
 
     def _load_current_display(self) -> RenderedDisplay | None:
         try:
-            profile = get_device_profile(self.settings().profile_id)
-            image_mode = "L" if profile.grayscale_levels > 2 else "1"
             with Image.open(self.current_display_path) as source:
+                image_size = source.size
+                configured_profile = get_device_profile(self.settings().profile_id)
+                profiles = [configured_profile]
+                if configured_profile.id.startswith("kindle_"):
+                    profiles.append(KINDLE_6_167PPI)
+                profile = next(
+                    candidate
+                    for candidate in profiles
+                    if (candidate.width, candidate.height) == image_size
+                )
+                image_mode = "L" if profile.grayscale_levels > 2 else "1"
                 image = source.convert(image_mode)
             frame = self.forge.encode(image, "restored-current", profile, datetime.now())
-        except (OSError, ValueError, ConfigError):
+        except (OSError, StopIteration, ValueError, ConfigError):
             return None
         return RenderedDisplay(item_id=0, image=image, frame=frame)
 
     def render_next(self, now: datetime | None = None) -> RenderedDisplay:
         settings = self.settings()
         now = now or datetime.now()
+        if self.display_mode(now) == TREASURE_HUNT_MODE:
+            return self._render_treasure_hunt(settings, now)
         next_at = self._next_check_at(settings, now)
         if self._has_forced_scene(settings):
             prepared = self._peek_next_scene(settings, now)
@@ -317,9 +351,15 @@ class DisplayService:
 
     def preview_next_delivery(self, now: datetime | None = None) -> RenderedDisplay:
         """Preview the pending delivery, or the scene the next GET would consume."""
+        now = now or datetime.now()
         with self._delivery_lock:
-            if self._pending_display is not None:
+            if (
+                self._pending_display is not None
+                and self._pending_display_key == self._delivery_key(now)
+            ):
                 return self._pending_display
+            self._pending_display = None
+            self._pending_display_key = None
             return self.render_next(now)
 
     def _render_scene(
@@ -353,6 +393,32 @@ class DisplayService:
             image=output.image,
             frame=output.frame,
         )
+
+    def _render_treasure_hunt(
+        self,
+        settings: Settings,
+        now: datetime,
+    ) -> RenderedDisplay:
+        panel = PanelConfig(
+            "portrait_1",
+            (SlotAssignment(1, TreasureHuntModule.name),),
+        )
+        portrait_settings = replace(
+            settings,
+            profile_id=KINDLE_6_167PPI.id,
+            panels=(panel,),
+            display_profiles=(),
+        )
+        prepared = self._prepare_panel(
+            portrait_settings,
+            now,
+            panel,
+            self.device_modules,
+        )
+        return self._render_scene(prepared, portrait_settings, now)
+
+    def _delivery_key(self, now: datetime) -> tuple[object, ...]:
+        return (now.date(), self.display_mode(now))
 
     def _scene_for_item(
         self,
@@ -480,7 +546,79 @@ class DisplayService:
         ChecklistStore(settings.library_dir).redeem(settings.reward, now)
         return self.reward_status(now)
 
+    def treasure_hunt(self) -> TreasureHunt:
+        return TreasureHuntStore(self.settings().library_dir).load()
+
+    def treasure_hunt_backgrounds(self) -> tuple[TreasureHuntBackground, ...]:
+        return TreasureHuntStore(self.settings().library_dir).backgrounds()
+
+    def treasure_hunt_background_path(self, name: str) -> Path:
+        return TreasureHuntStore(self.settings().library_dir).background_path(name)
+
+    def treasure_hunt_check_path(self) -> Path:
+        return TreasureHuntStore(self.settings().library_dir).check_path()
+
+    def save_treasure_hunt(
+        self,
+        background: object,
+        texts: object,
+        completed: object,
+    ) -> TreasureHunt:
+        return TreasureHuntStore(self.settings().library_dir).save(
+            background,
+            texts,
+            completed,
+        )
+
+    def render_treasure_hunt_preview(
+        self,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            raise ValueError("treasure hunt preview requires a Kindle device")
+        return self._render_treasure_hunt(settings, now or datetime.now())
+
+    def display_mode(self, now: datetime | None = None) -> str:
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            return TASKBOARD_MODE
+        return self.display_mode_store.selected((now or datetime.now()).date())
+
+    def select_display_mode(
+        self,
+        mode: str,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        now = now or datetime.now()
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            raise ValueError("display modes are only supported for Kindle")
+        self.display_mode_store.select(mode, now.date())
+        with self._delivery_lock:
+            rendered = self.render(
+                device=True,
+                remember_device=False,
+                now=now,
+            )
+            self._pending_display = rendered
+            self._pending_display_key = self._delivery_key(now)
+            self._last_ack = None
+            return rendered
+
     def refresh_prepared_checklists(self) -> None:
+        self._refresh_prepared_modules(frozenset({ChecklistModule.name}))
+
+    def refresh_prepared_treasure_hunts(self) -> None:
+        now = datetime.now()
+        if self.display_mode(now) != TREASURE_HUNT_MODE:
+            return
+        with self._delivery_lock:
+            self._pending_display = self._render_treasure_hunt(self.settings(), now)
+            self._pending_display_key = self._delivery_key(now)
+            self._last_ack = None
+
+    def _refresh_prepared_modules(self, module_names: frozenset[str]) -> None:
         settings = self.settings()
         with self._next_scene_lock:
             if (
@@ -491,7 +629,7 @@ class DisplayService:
             at = self._next_scene.scene.target_at or datetime.now()
             fragments = list(self._next_scene.scene.fragments)
             for index, assignment in enumerate(self._next_scene.panel.slots):
-                if assignment.module != ChecklistModule.name:
+                if assignment.module not in module_names:
                     continue
                 fragments[index] = SceneFragment(
                     fragments[index].id,

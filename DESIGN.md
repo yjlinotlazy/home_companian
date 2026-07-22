@@ -132,6 +132,12 @@ CrowPanel ESP-IDF 客户端已纳入本仓库：`clients/crowpanel/crowpanel-579
 - `GET /v1/devices/{device_id}/preview-selection`：为该设备执行随机或定时预览选择。
 - `POST /v1/devices/{device_id}/change`：把预览选择设为该设备下一屏。
 - `GET /v1/devices/{device_id}/next-refresh` 和 `next-preview.png`：返回该设备下次检查时间与实际待投递 Frame 的缩略预览。
+- `GET /v1/treasure-hunt`：返回当前背景、六条线索、可选背景及各自文本区域。
+- `GET /v1/treasure-hunt/background?name=...`：返回内容库中的指定寻宝背景 PNG。
+- `GET /v1/treasure-hunt/check.png`：返回带透明通道的完成勾。
+- `GET /v1/treasure-hunt/preview.png`：返回按当前编辑内容渲染的 600×800 Kindle 竖屏预览。
+- `POST /v1/treasure-hunt`：原子保存背景和六条线索。
+- `POST /v1/treasure-hunt/mode`：在 `taskboard` 与 `treasure_hunt` 间切换 Kindle 模式，并立即替换待投递 Frame。
 - `GET /`：提供简单网页预览和手动刷新入口。
 
 设备接口直接返回排版完成的 framebuffer。ESP32 不负责解析 JSON、字体排版或 PNG 解码。
@@ -187,6 +193,12 @@ home_companian_library/
 ├── checklists.csv
 ├── checklist_completions.csv
 ├── reward_redemptions.csv
+├── treasure_hunt/
+│   ├── current.yaml
+│   ├── check_grey.png
+│   └── background/
+│       ├── background1.png
+│       └── background1.yaml
 ├── photos/
 │   └── family_trip.png
 └── images/
@@ -201,6 +213,9 @@ home_companian_library/
 - `math/problems.csv`：算术和数学思维题，答案只保存在内容库中，第一版不显示。
 - `photos/`：已处理、可直接上屏的家庭图片。
 - `images/`：已处理、可直接上屏的通用插图、背景和图标。
+- `treasure_hunt/current.yaml`：当前寻宝游戏的背景文件名、六条文本和六个 boolean 完成状态，由网页原子写入。
+- `treasure_hunt/check_grey.png`：透明灰色完成勾；渲染在文字下层，避免遮住线索。
+- `treasure_hunt/background/<name>.png`：寻宝背景；同目录必须有 `<name>.yaml`，其中 `text_boxes` 恰好包含六组归一化 `[x, y, width, height]`。
 
 `photos/` 和 `images/` 只保存成品素材，不保存原图。图片规范为：
 
@@ -312,6 +327,10 @@ panel:
 
 `checklist` 模块通过 slot 的 `group` 引用 `config.yaml` 中的清单 ID，再按配置的任务 ID 和顺序读取 `checklists.csv`，绘制标题、checkbox 和文字。`type=personal` 的完成记录积 1 分，`type=family_task` 积 2 分；所有清单的积分进入同一个余额。Kindle 当前将三组配置清单放在 `landscape_5` 的三个区域，第四区使用 `images` 模块的全 collection 通配轮换。Kindle 客户端不接收或处理 checkbox 事件。
 
+`treasure_hunt` 不参与任务板 panel rotation。用户在网页手动进入该模式后，服务端临时使用 `kindle_6_167ppi` 与 `portrait_1` 生成正向 600×800 PNG；任务板继续使用原来的横屏 profile 和 `landscape_5`，两套方向互不修改。选择的模式按 Kindle Device Instance 写入本地 state，当天持续有效；手动切换或服务器日期进入第二天时恢复任务板。
+
+Treasure Hunt 的 prepare 阶段把当前背景、六个区域、六条文本和完成状态保存为 Scene snapshot；render 阶段完整保留背景、不裁边，在已完成区域内先按透明通道合成 `check_grey.png`，再绘制文字，因此线索不会被勾遮住。文字在各区域内自动换行，并把字号从 36px 缩小到最低 16px。背景布局属于内容库，因此新增不同构图的背景不需要修改渲染代码。每条文本最长 200 个字符。
+
 Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像替代清单 ID 标题并靠右绘制，任务保留在左侧；人物素材仍属于内容库，不进入代码。
 
 当前配置只定义一个 reward：`{id: toy, name: 玩具, cost: 50, initial_points: 25}`。第一次兑换前余额含 25 分初始赠送，完成积分跨日累计并在 50 分封顶。达到 50 后网页按钮才允许手动兑换；兑换写入 `reward_redemptions.csv`，以该时间作为新一轮积分起点，因此余额归零且封顶期间的额外完成不结转。初始赠送只属于第一轮，不会在兑换后重新出现。
@@ -334,6 +353,8 @@ Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像�
 
 - 每个 Device Instance 有独立区块，均提供当前画面、下一次刷新时间和下一帧缩略图；只有包含 `items` 模块的 presentation 显示随机预览、定时预览和“更改”。
 - “今日清单”是独立于设备区块的服务端交互区；它写入完成结算、显示玩具进度条，并在满 50 分后允许手动兑换。勾选或兑换都会刷新各设备的下一帧缩略图。
+- Kindle Device 区块提供 `taskboard` / `treasure_hunt` 模式下拉菜单和“确定”按钮；选择生效后，对应的“任务板”或“寻宝游戏”section 标题追加“（当前模式）”。
+- “寻宝游戏”编辑器提供背景下拉菜单、覆盖在背景上的六个多行输入框和六个完成复选框，右侧显示 300×400 的最终 Kindle 竖屏预览。勾选完成会立即保存并更新透明勾预览。模式当天保持，跨日自动回任务板。
 - 随机预览和定时预览不受 YAML 的当前模式限制。
 - 随机预览提供“换一个”按钮，每次选择新的随机项目。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
@@ -343,7 +364,7 @@ Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像�
 - 手动更改不按时钟提前过期；即使设备延迟唤醒，也保留到下一次设备请求。消费后恢复正常选择，服务重启或模板/编排变化也会清除该更改。
 - 网页随机预览和设备随机选择使用独立状态，预览不会提前消耗或改变设备的下一个随机结果。
 - `fonts` / `font` 保存中文字体候选和当前选择；`latin_fonts` / `latin_font` 保存非中文字体候选和当前选择。网页的两个下拉菜单写回各自选择，永久影响网页和设备画面。
-- 每台设备显示自己的下一次刷新时间和缩略预览。若已有待 ACK Frame，缩略图必须显示该 Frame；否则显示该设备下一次请求将消费的预生成内容。服务重启后内存状态清空。
+- 每台设备显示自己的下一次刷新时间和右侧预览；预览尺寸统一为设备原始画面的 50%。若已有待 ACK Frame，预览必须显示该 Frame；否则显示该设备下一次请求将消费的预生成内容。服务重启后内存状态清空。
 - `wall_panel` 最后一次画面继续写入 `~/.local/state/home_companian/current.png`，其他设备按设备写入 `current-<device_id>.png`。服务重启后仍可恢复；下一屏状态仍只保存在内存中。
 - 设备专用 `GET /v1/devices/{device_id}/preview.png` 优先返回已确认的当前 Frame。没有兼容的当前 Frame 时，为方便接入调试，返回服务端生成的候选 PNG；主页必须同时标注“设备尚未确认显示画面”，不得把它表述成设备当前状态。
 

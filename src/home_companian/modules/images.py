@@ -104,10 +104,9 @@ class ImagesModule:
     ) -> Image.Image:
         del now
         path = self._image_path(settings.library_dir, content_id)
+        path = self._kindle_grayscale_path(settings, path)
         try:
             with Image.open(path) as image:
-                if image.format != "PNG":
-                    raise ConfigError(f"image asset must be PNG: {path}")
                 return process_image(
                     image,
                     size=(rect.width, rect.height),
@@ -116,6 +115,21 @@ class ImagesModule:
                 )
         except OSError as exc:
             raise ConfigError(f"image asset cannot be opened: {path}") from exc
+
+    @staticmethod
+    def _kindle_grayscale_path(settings: Settings, path: Path) -> Path:
+        if not settings.profile_id.startswith("kindle_") or path.stem.endswith("_grey"):
+            return path
+        grayscale_stem = f"{path.stem}_grey"
+        try:
+            candidates = sorted(
+                candidate
+                for candidate in path.parent.iterdir()
+                if candidate.is_file() and candidate.stem == grayscale_stem
+            )
+        except OSError:
+            return path
+        return candidates[0] if candidates else path
 
     @staticmethod
     def _image_path(library_dir: Path, content_id: int | str) -> Path:

@@ -115,6 +115,17 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn(b'data-reward-id="toy"', page)
         self.assertIn(b'data-action="redeem-reward"', page)
         self.assertNotIn(b'data-action="redeem-reward" disabled', page)
+        self.assertIn("寻宝游戏".encode(), page)
+        self.assertEqual(page.count(b"<textarea data-treasure-text="), 6)
+        self.assertIn(b'data-mode-section-title="treasure_hunt"', page)
+        self.assertNotIn("显示寻宝游戏".encode(), page)
+        self.assertNotIn("返回任务板".encode(), page)
+        self.assertEqual(
+            page.count(b'<input type="checkbox" data-treasure-completed="'),
+            6,
+        )
+        self.assertIn(b'data-treasure-rendered-preview', page)
+        self.assertIn(b'width="300" height="400"', page)
 
     def test_index_stacks_crowpanel_then_kindle(self) -> None:
         page = index_html(
@@ -147,6 +158,11 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(page.count("<img data-next-preview"), 2)
         self.assertEqual(page.count("data-next-refresh-time"), 2)
         self.assertIn('data-action="refresh-rendered">手动刷新</button>', page)
+        self.assertIn('<select data-display-mode>', page)
+        self.assertIn('data-action="apply-display-mode">确定</button>', page)
+        self.assertIn('data-mode-section-title="taskboard">任务板</h3>', page)
+        self.assertIn("--preview-width:396px", page)
+        self.assertIn("--preview-width:400px", page)
 
     def test_recognizes_random_preview(self) -> None:
         self.assertTrue(is_random_preview("mode=random"))

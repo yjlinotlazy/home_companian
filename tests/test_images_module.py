@@ -20,7 +20,10 @@ class ImagesModuleTests(unittest.TestCase):
         self.collection.mkdir(parents=True)
         Image.new("1", (200, 200), 255).save(self.collection / "a.png")
         Image.new("1", (200, 200), 0).save(self.collection / "b.png")
-        self.settings = SimpleNamespace(library_dir=self.library)
+        self.settings = SimpleNamespace(
+            library_dir=self.library,
+            profile_id="crowpanel_579",
+        )
         self.assignment = SlotAssignment(
             1, "images", (("collection", "plants"),)
         )
@@ -97,6 +100,53 @@ class ImagesModuleTests(unittest.TestCase):
         self.assertEqual((rendered.size, rendered.mode), ((100, 100), "L"))
         self.assertEqual(rendered.getpixel((50, 0)), 255)
         self.assertEqual(rendered.getpixel((50, 50)), 0)
+
+    def test_kindle_prefers_grey_sibling_regardless_of_extension(self) -> None:
+        Image.new("L", (200, 200), 0).save(self.collection / "a_grey.jpg")
+        settings = SimpleNamespace(
+            library_dir=self.library,
+            profile_id="kindle_6_167ppi",
+        )
+
+        rendered = ImagesModule().render(
+            settings,
+            "plants/a.png",
+            Rect(0, 0, 200, 200),
+            datetime.now(),
+        )
+
+        self.assertEqual(rendered.getextrema(), (0, 0))
+
+    def test_kindle_keeps_selected_grey_asset(self) -> None:
+        Image.new("L", (200, 200), 0).save(self.collection / "a_grey.png")
+        settings = SimpleNamespace(
+            library_dir=self.library,
+            profile_id="kindle_6_167ppi",
+        )
+
+        rendered = ImagesModule().render(
+            settings,
+            "plants/a_grey.png",
+            Rect(0, 0, 200, 200),
+            datetime.now(),
+        )
+
+        self.assertEqual(rendered.getextrema(), (0, 0))
+
+    def test_kindle_uses_original_when_grey_sibling_is_missing(self) -> None:
+        settings = SimpleNamespace(
+            library_dir=self.library,
+            profile_id="kindle_6_167ppi_landscape",
+        )
+
+        rendered = ImagesModule().render(
+            settings,
+            "plants/a.png",
+            Rect(0, 0, 200, 200),
+            datetime.now(),
+        )
+
+        self.assertEqual(rendered.getextrema(), (255, 255))
 
     def test_rejects_path_traversal(self) -> None:
         with self.assertRaisesRegex(ConfigError, "invalid image content id"):

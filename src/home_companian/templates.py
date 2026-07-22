@@ -31,7 +31,13 @@ def validate_panel(panel: PanelConfig) -> Template:
                 f"template {template.id} has no slot {assignment.slot_id}"
             )
         if assignment.module not in {
-            "items", "chinese", "images", "health", "math", "checklist"
+            "items",
+            "chinese",
+            "images",
+            "health",
+            "math",
+            "checklist",
+            "treasure_hunt",
         }:
             raise ConfigError(f"unknown module: {assignment.module}")
     return template

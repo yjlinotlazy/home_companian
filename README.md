@@ -180,7 +180,7 @@ Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力
 
 数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
 
-主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧缩略图；包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
+主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧预览；右侧预览统一按设备原始宽高的 50% 显示。包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 
 设备专用 `preview.png` 优先显示设备已 ACK 的当前画面；尚无 ACK 时仍返回服务端生成的候选图，并在主页标注“设备尚未确认显示画面”，方便接入和调试。
 
@@ -206,6 +206,12 @@ home_companian_library/
 │   ├── plants/
 │   ├── animals/
 │   └── etc/
+├── treasure_hunt/
+│   ├── current.yaml
+│   ├── check_grey.png
+│   └── background/
+│       ├── background1.png
+│       └── background1.yaml
 └── photos/
 ```
 
@@ -218,8 +224,13 @@ home_companian_library/
 - `chinese/full.md`：按一年级至六年级列出完整字表。
 - `chinese/select.md`：只写当前启用的汉字。
 - `images/` 和 `photos/`：供显示使用的已处理图片；集合中的 `raw/` 不参与轮换。
+- `treasure_hunt/current.yaml`：网页维护的当前背景、六条线索和六个完成状态。
+- `treasure_hunt/check_grey.png`：带透明通道的灰色完成勾，覆盖在线索纸张内并保持文字位于上层。
+- `treasure_hunt/background/`：背景 PNG 及其同名 YAML；YAML 中必须用六组归一化 `[x, y, width, height]` 定义 `text_boxes`。
 
 Kindle 当前使用 `landscape_5`：三个清单依次占三个区域，第四个区域从 `images/` 的所有直接子目录随机选取 PNG。清单名称、成员归属和顺序由 `config.yaml` 决定。图片配置写作 `{module: images, collections: "*"}`；名为 `raw` 的目录、各集合内部的 `raw/` 和空目录都不参与轮换。网页取消当天勾选时，只删除当天对应记录；以前日期的结算保留。
+
+寻宝游戏不参与任务板 rotation。主页编辑器会扫描背景目录，按所选背景的六个区域摆放输入框；每条最多 200 个字符，并有独立“完成”复选框。完成后用透明 `check_grey.png` 在对应纸张上打勾，文字继续显示在勾上方。编辑器右侧显示 300×400 的最终 Kindle 竖屏预览。设备渲染自动换行和缩小字号。Kindle 区块下方的模式下拉菜单在任务板与寻宝游戏之间切换，点击“确定”后生效；当前模式会标记在对应 section 标题中。手动选择的模式当天持续有效；进入第二天自动恢复任务板。
 
 清单 slot 可用 `portrait: portraits/person_1.png` 以内容库中的 PNG 头像替代文字标题；头像靠区域右侧显示，任务仍排在左侧。可选的 `portrait_width` 用于单独调整头像宽度，范围为 40–190 像素。
 

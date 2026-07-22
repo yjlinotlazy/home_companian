@@ -193,6 +193,8 @@ class ChecklistTests(unittest.TestCase):
 
         self.assertEqual(before.crop((22, 71, 51, 100)).getextrema(), (255, 255))
         self.assertEqual(after.crop((22, 71, 51, 100)).getextrema(), (0, 0))
+        self.assertEqual(before.getpixel((20, 70)), 255)
+        self.assertEqual(after.getpixel((20, 70)), 0)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_portrait_replaces_group_title(self) -> None:

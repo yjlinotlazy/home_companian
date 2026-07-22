@@ -162,24 +162,27 @@ class ChecklistModule:
 
         box_size = max(18, text_size - 3)
         line_height = max(box_size + 12, text_size + 12)
+        completed_icon_size = min(line_height, round(box_size * 1.15))
         icons = {
             False: self._checklist_icon(settings.library_dir, "heart.png", box_size),
             True: self._checklist_icon(
                 settings.library_dir,
                 "heart_completed.png",
-                box_size,
+                completed_icon_size,
             ),
         }
         y = 64
         for item in items:
             if y + line_height > content_height:
                 break
-            box_y = y + (line_height - box_size) // 2
             completed = item.id in completed_ids
             icon = icons[completed]
             if icon is not None:
-                image.paste(icon, (22, box_y))
+                icon_x = 22 - (icon.width - box_size) // 2
+                icon_y = y + (line_height - icon.height) // 2
+                image.paste(icon, (icon_x, icon_y))
             else:
+                box_y = y + (line_height - box_size) // 2
                 self._draw_fallback_checkbox(
                     draw,
                     22,
