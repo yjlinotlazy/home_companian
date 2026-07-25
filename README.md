@@ -27,6 +27,8 @@ CrowPanel ESP32 链路已经可用。Kindle 已实机打通 PNG 下载、`eips` 
 - 识字内容。
 - 徒手健身动作。
 - 24 点等数学小游戏。
+- 中文四字、英文四词的创意故事提示。
+- 用三种图形替换 2–3 个字母的英文句子破解游戏。
 - 节气、星期等状态栏信息。
 
 目前支持定时和随机两种内容选择方式。每日清单在网页勾选，Kindle 下次唤醒时显示完成状态；设备本身不处理互动。当前已支持一项积分奖励，更复杂的任务领取仍是后续方向。
@@ -173,14 +175,22 @@ devices:
           template: landscape_1
           slots:
             1: {module: math, type: games}
+        creative:
+          template: landscape_1
+          slots:
+            1: {module: creative, language: random}
+        language:
+          template: landscape_1
+          slots:
+            1: {module: language, type: cipher}
       display_profiles:
-        mixed: {minutes: 20, panels: [dashboard, math]}
+        mixed: {minutes: 20, panels: [dashboard, math, creative, language]}
         dashboard_only: {minutes: 40, panels: [dashboard]}
 ```
 
 Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力；`presentation.display_profiles` 则把刷新分钟数和允许轮换的命名 panels 绑定，`refresh.schedule` 按时段引用它。未配置 display profiles 时，旧的固定刷新窗口和 panel 列表仍兼容。完整示例见 [config.example.yaml](config.example.yaml)。
 
-数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
+数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。找规律题包含数字、符号、词语、方向和图形化骰子点数序列。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
 
 主页为每台配置设备分别显示当前画面、下一次刷新时间和下一帧预览；右侧预览统一按设备原始宽高的 50% 显示。Kindle 的任务板区域始终预览任务板，不随当前显示模式切换成寻宝画面；寻宝使用自己的独立预览。包含 `items` 模块的设备还提供随机/定时预览及“更改”。临时预览不会改变设备当前画面，“更改”只影响下一屏。网页另有“今日清单”，勾选结果会更新下一帧，但不会冒充设备当前画面。字体菜单暂时全局共享。
 
@@ -225,6 +235,9 @@ home_companian_library/
 - `math/problems.csv`：`id,type,question,answer`，保存算术和数学思维题；答案暂不显示。24 点不写入 CSV，而由服务端随机生成，只使用加、减和低阶乘法，并保证有解。
 - `chinese/full.md`：按一年级至六年级列出完整字表。
 - `chinese/select.md`：只写当前启用的汉字。
+- `creative/chinese.txt`：每行一个小学常用汉字，至少四个且不能重复。
+- `creative/english.txt`：每行一个小学难度英文单词，至少四个且不能重复。
+- `language/english_sentences.txt`：每行一句小学难度英文句子，供字母密码游戏随机选择。
 - `images/` 和 `photos/`：供显示使用的已处理图片；集合中的 `raw/` 不参与轮换。
 - `treasure_hunt/current.yaml`：网页维护的当前背景、六条线索和六个完成状态。
 - `treasure_hunt/check_grey.png`：带透明通道的灰色完成勾，覆盖在线索纸张内并保持文字位于上层。

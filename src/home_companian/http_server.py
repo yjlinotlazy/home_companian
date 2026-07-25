@@ -6,6 +6,7 @@ from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+from ipaddress import ip_address
 from pathlib import Path
 from datetime import datetime, time
 from threading import Lock
@@ -19,6 +20,20 @@ from .service import DisplayService, RenderedDisplay, RewardStatus
 
 
 DISPLAY_BIN_DEVICE_ID = "wall_panel"
+
+
+def request_source_ip(peer_ip: str, forwarded_for: str | None) -> str:
+    try:
+        peer = ip_address(peer_ip)
+    except ValueError:
+        return peer_ip
+    if not peer.is_loopback or not forwarded_for:
+        return peer_ip
+    candidate = forwarded_for.split(",", 1)[0].strip()
+    try:
+        return str(ip_address(candidate))
+    except ValueError:
+        return peer_ip
 
 
 @dataclass(frozen=True)
@@ -130,7 +145,10 @@ def index_html(
     <h3 data-mode-section-title="taskboard">任务板</h3>"""
         else:
             preview_action = "preview.png"
+            continue_disabled = "" if device.confirmed else " disabled"
             refresh_controls = f"""<span>下次刷新：<span data-next-refresh-time>加载中</span></span>
+      <button type="button" data-action="continue-current"{continue_disabled}>继续当前</button>
+      <span data-continue-status></span>
       <img data-next-preview alt="{label} next frame preview">"""
             mode_controls = ""
         return f"""<section class="device-section" data-device-id="{device_id}"
@@ -248,13 +266,14 @@ def index_html(
 .treasure-completed {{ position:absolute; transform:translate(-100%,-100%); padding:.15rem .3rem; white-space:nowrap; background:rgba(255,255,255,.82); font-size:.8rem; }}
 .treasure-hunt-actions {{ display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-top:.75rem; }}
 .treasure-rendered-preview {{ margin-top:.75rem; }}
-.treasure-rendered-preview img {{ display:block; width:300px; height:auto; border:1px solid #aaa; }}
+.treasure-rendered-preview img {{ display:block; width:min(300px,100%); max-width:100%; height:auto; box-sizing:border-box; border:1px solid #aaa; }}
 .checklist-grid {{ display:grid; grid-template-columns:repeat(3,minmax(140px,190px)); gap:.5rem; justify-content:start; }}
 .checklist-grid fieldset {{ display:grid; gap:.3rem; margin:0; padding:.35rem .55rem .5rem; }}
 .checklist-grid label {{ white-space:nowrap; }}
 .reward-control {{ display:grid; grid-template-columns:auto 150px auto; gap:.5rem; align-items:center; margin-top:.65rem; width:fit-content; }}
 .reward-control progress {{ width:150px; }}
 @media (max-width: 760px) {{
+  body {{ margin:1rem !important; }}
   .display-layout {{ grid-template-columns:minmax(0,1fr); }}
   .next-refresh {{ width:min(var(--preview-width),100%); }}
   .treasure-hunt-layout {{ grid-template-columns:minmax(0,1fr); }}
@@ -342,6 +361,23 @@ document.querySelectorAll('.device-section').forEach(section => {{
   if (refreshButton) {{
     refreshButton.addEventListener('click', () => refreshRendered(section));
   }}
+  const continueButton = section.querySelector('[data-action="continue-current"]');
+  if (continueButton) {{
+    continueButton.addEventListener('click', async () => {{
+      const status = section.querySelector('[data-continue-status]');
+      continueButton.disabled = true;
+      try {{
+        const response = await fetch(devicePath(section, 'continue-current'), {{method: 'POST'}});
+        if (!response.ok) throw new Error(await response.text());
+        status.textContent = '已沿用到下次刷新';
+        await loadNextRefresh(section);
+      }} catch (error) {{
+        status.textContent = error.message;
+      }} finally {{
+        continueButton.disabled = false;
+      }}
+    }});
+  }}
   const modeButton = section.querySelector('[data-action="apply-display-mode"]');
   if (modeButton) {{
     modeButton.addEventListener('click', async () => {{
@@ -406,7 +442,9 @@ function updateReward(reward) {{
   if (!reward) return;
   const control = document.querySelector('[data-reward-id]');
   if (!control) return;
-  control.querySelector('[data-reward-progress]').value = reward.score;
+  const progress = control.querySelector('[data-reward-progress]');
+  progress.value = reward.score;
+  progress.setAttribute('value', String(reward.score));
   control.querySelector('[data-action="redeem-reward"]').disabled = !reward.redeemable;
 }}
 
@@ -414,12 +452,24 @@ document.querySelectorAll('[data-action="redeem-reward"]').forEach(button => {{
   button.addEventListener('click', async () => {{
     const control = button.closest('[data-reward-id]');
     const rewardId = encodeURIComponent(control.dataset.rewardId);
-    const response = await fetch('/v1/rewards/' + rewardId + '/redeem', {{method: 'POST'}});
-    if (!response.ok) throw new Error(await response.text());
-    const result = await response.json();
-    updateReward(result.reward);
-    document.querySelector('[data-checklist-status]').textContent = '已兑换；积分已清零';
-    document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+    const progress = control.querySelector('[data-reward-progress]');
+    const previousScore = Number(progress.value);
+    progress.value = 0;
+    progress.setAttribute('value', '0');
+    button.disabled = true;
+    try {{
+      const response = await fetch('/v1/rewards/' + rewardId + '/redeem', {{method: 'POST'}});
+      if (!response.ok) throw new Error(await response.text());
+      const result = await response.json();
+      updateReward(result.reward);
+      document.querySelector('[data-checklist-status]').textContent = '已兑换；积分已清零';
+      document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+    }} catch (error) {{
+      progress.value = previousScore;
+      progress.setAttribute('value', String(previousScore));
+      button.disabled = false;
+      document.querySelector('[data-checklist-status]').textContent = error.message;
+    }}
   }});
 }});
 
@@ -827,6 +877,15 @@ def make_handler(
                     )
                 elif next_device_id is not None:
                     device_service = device_services.get(next_device_id)
+                    source_ip = request_source_ip(
+                        self.client_address[0],
+                        self.headers.get("X-Forwarded-For"),
+                    )
+                    self.log_message(
+                        "device image request device=%s ip=%s",
+                        next_device_id,
+                        source_ip,
+                    )
                     rendered = device_service.deliver()
                     self._send(
                         HTTPStatus.OK,
@@ -925,6 +984,10 @@ def make_handler(
             try:
                 ack_device_id = parse_device_route(request.path, "ack")
                 change_device_id = parse_device_route(request.path, "change")
+                continue_device_id = parse_device_route(
+                    request.path,
+                    "continue-current",
+                )
                 refresh_device_id = parse_device_route(request.path, "refresh")
                 checklist_item_id = parse_checklist_route(request.path)
                 reward_id = parse_reward_route(request.path)
@@ -946,6 +1009,14 @@ def make_handler(
                     self._send_json(
                         HTTPStatus.OK,
                         {"item_id": item_id, "next_at": next_at.isoformat()},
+                    )
+                elif continue_device_id is not None:
+                    next_at = device_services.get(
+                        continue_device_id
+                    ).continue_current()
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"next_at": next_at.isoformat()},
                     )
                 elif refresh_device_id is not None:
                     rendered = device_services.get(

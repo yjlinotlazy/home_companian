@@ -99,6 +99,25 @@ class DisplayServiceTests(unittest.TestCase):
         self.assertEqual(current.frame.id, first.frame.id)
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
+    def test_continue_current_reuses_confirmed_image_for_next_delivery(self) -> None:
+        displayed_at = datetime(2026, 7, 15, 12, 30)
+        current = self.service.deliver(displayed_at)
+        self.service.acknowledge(current.frame.id, "displayed")
+
+        next_at = self.service.continue_current(
+            datetime(2026, 7, 15, 12, 40)
+        )
+        continued = self.service.deliver(next_at)
+
+        self.assertEqual(next_at, datetime(2026, 7, 15, 13, 0))
+        self.assertEqual(continued.item_id, current.item_id)
+        self.assertEqual(continued.frame.scene_id, current.frame.scene_id)
+
+    def test_continue_current_requires_confirmed_crowpanel_display(self) -> None:
+        with self.assertRaisesRegex(ValueError, "has not confirmed"):
+            self.service.continue_current(datetime(2026, 7, 15, 12, 40))
+
+    @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_manual_refresh_replaces_pending_delivery_with_checklist_state(self) -> None:
         root = self.config_path.parent
         (root / "checklists.csv").write_text(
@@ -115,16 +134,38 @@ class DisplayServiceTests(unittest.TestCase):
             yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
-        now = datetime(2026, 7, 21, 10, 0)
+        # The next scheduled check is tomorrow, but a manual refresh must still
+        # render today's newly completed checklist state.
+        now = datetime(2026, 7, 21, 21, 45)
         before = self.service.deliver(now)
 
         self.service.set_checklist_completed(1, True, now)
         refreshed = self.service.refresh_delivery(now)
         delivered = self.service.deliver(now)
+        fresh_service = DisplayService(
+            self.config_path,
+            root / "fresh-current.png",
+        )
+        fresh_refreshed = fresh_service.refresh_delivery(now)
+        preview = self.service.preview_taskboard_delivery(now)
 
         self.assertNotEqual(before.frame.id, refreshed.frame.id)
         self.assertNotEqual(before.image.tobytes(), refreshed.image.tobytes())
         self.assertEqual(delivered.frame.id, refreshed.frame.id)
+        self.assertEqual(fresh_refreshed.image.tobytes(), refreshed.image.tobytes())
+        self.assertEqual(preview.image.tobytes(), refreshed.image.tobytes())
+
+        next_day = datetime(2026, 7, 22, 7, 0)
+        next_day_delivery = self.service.deliver(next_day)
+        clean_service = DisplayService(
+            self.config_path,
+            root / "clean-current.png",
+        )
+        clean_next_day_delivery = clean_service.deliver(next_day)
+        self.assertEqual(
+            next_day_delivery.image.tobytes(),
+            clean_next_day_delivery.image.tobytes(),
+        )
 
     @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
     def test_next_preview_uses_pending_delivery(self) -> None:

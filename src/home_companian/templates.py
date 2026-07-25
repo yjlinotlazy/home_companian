@@ -32,7 +32,9 @@ def validate_panel(panel: PanelConfig) -> Template:
             )
         if assignment.module not in {
             "items",
+            "language",
             "chinese",
+            "creative",
             "images",
             "health",
             "math",

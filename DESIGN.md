@@ -345,6 +345,12 @@ Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像�
 
 `math` 模块从 `math/problems.csv` 随机选择 `arithmetic` 和 `thinking` 题目并避免连续重复；`game24` 不存题库，而是在每次 prepare 时随机生成。生成器使用四个 1–9 的整数且每个恰好使用一次，只允许加法、非负减法以及以 1、2、3 为其中一侧因子的乘法，不允许除法或分数；服务端求解确认能得到 24 后才出题。Scene fragment 保存本次数字和解法，画面只显示“24点”标题与四个数字，不显示答案。slot 的 `type` 可为 `arithmetic`、`thinking`、`game24` 或 `all`。
 
+`pattern` 生成五个已知项并隐藏第六项，题型包括等差、交替步长、重复数字、符号、词语、方向及骰子。骰子不用字体字符，而是直接绘制边框和点数，保证 CrowPanel 单色屏显示稳定；当前包含 1→6、6→1 和两种点数交替三类规律。
+
+`creative` 是与数学单栏 panel 平级的独立内容模块。它从 `creative/chinese.txt` 或 `creative/english.txt` 随机抽取四个不重复的低年级字词，以四格大字形式提示孩子把四项全部用于一个故事。slot 的 `language` 可为 `chinese`、`english` 或 `random`。CrowPanel 的 active display profile 将 creative 作为独立 panel 加入 rotation；只允许三栏 dashboard 的 daytime profile 不包含它。
+
+`language` 是独立的语文游戏模块，首个类型为 `cipher`。它从 `language/english_sentences.txt` 选择简单英文句子，优先从重复出现的字母中随机选 2–3 个，并依次替换成 `△`、`○`、`□`。Scene snapshot 保存原句、加密句和各图形对应的答案；画面只显示加密句及“图形 = ?”提示，不显示答案。该单栏 panel 只加入 CrowPanel active rotation，daytime 三栏-only规则不变。
+
 未来的“屏幕编辑器”是 presentation 配置的图形界面：浏览程序内置模板、查看 Scene 中的语义模块，并为某个 Device Profile 配置模块到区域的映射。编辑器仍写回同一份配置，不维护第二套状态。
 
 ## 网页预览

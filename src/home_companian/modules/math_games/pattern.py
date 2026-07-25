@@ -43,6 +43,9 @@ class PatternGame:
             self._repeat_words,
             self._alternating_steps,
             self._growing_steps,
+            self._dice_count_up,
+            self._dice_count_down,
+            self._dice_alternating,
         )
         with self._lock:
             for _ in range(50):
@@ -91,21 +94,83 @@ class PatternGame:
         cell_width = (rect.width - 2 * 12 - 5 * gap) / 6
         cell_height = rect.height - content_top - 12
         font_path = settings.font if any(not item.isascii() for item in shown) else settings.latin_font
-        font = self._fit_font(draw, shown, font_path, cell_width - 10, cell_height - 10)
+        text_items = [item for item in shown if not item.startswith("die:")]
+        font = self._fit_font(
+            draw,
+            text_items,
+            font_path,
+            cell_width - 10,
+            cell_height - 10,
+        )
         for index, item in enumerate(shown):
             left = 12 + index * (cell_width + gap)
             top = content_top
             right = left + cell_width
             bottom = top + cell_height
             draw.rounded_rectangle((left, top, right, bottom), radius=8, outline=0, width=2)
-            draw.text(
-                ((left + right) / 2, (top + bottom) / 2),
-                item,
-                font=font,
-                fill=0,
-                anchor="mm",
-            )
+            if item.startswith("die:"):
+                try:
+                    die_value = int(item.removeprefix("die:"))
+                except ValueError as exc:
+                    raise ConfigError("invalid die value") from exc
+                self._draw_die(draw, die_value, left, top, right, bottom)
+            else:
+                draw.text(
+                    ((left + right) / 2, (top + bottom) / 2),
+                    item,
+                    font=font,
+                    fill=0,
+                    anchor="mm",
+                )
         return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")
+
+    @staticmethod
+    def _draw_die(
+        draw: ImageDraw.ImageDraw,
+        value: int,
+        left: float,
+        top: float,
+        right: float,
+        bottom: float,
+    ) -> None:
+        if not 1 <= value <= 6:
+            raise ConfigError("invalid die value")
+        side = min(right - left - 12, bottom - top - 12)
+        die_left = (left + right - side) / 2
+        die_top = (top + bottom - side) / 2
+        die_right = die_left + side
+        die_bottom = die_top + side
+        draw.rounded_rectangle(
+            (die_left, die_top, die_right, die_bottom),
+            radius=max(4, int(side // 7)),
+            outline=0,
+            width=max(2, int(side // 22)),
+        )
+        positions = {
+            "tl": (0.27, 0.27),
+            "tc": (0.5, 0.27),
+            "tr": (0.73, 0.27),
+            "ml": (0.27, 0.5),
+            "mc": (0.5, 0.5),
+            "mr": (0.73, 0.5),
+            "bl": (0.27, 0.73),
+            "bc": (0.5, 0.73),
+            "br": (0.73, 0.73),
+        }
+        layouts = {
+            1: ("mc",),
+            2: ("tl", "br"),
+            3: ("tl", "mc", "br"),
+            4: ("tl", "tr", "bl", "br"),
+            5: ("tl", "tr", "mc", "bl", "br"),
+            6: ("tl", "tr", "ml", "mr", "bl", "br"),
+        }
+        radius = max(2, int(side // 13))
+        for name in layouts[value]:
+            x_ratio, y_ratio = positions[name]
+            x = die_left + side * x_ratio
+            y = die_top + side * y_ratio
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=0)
 
     @staticmethod
     def _fit_font(
@@ -188,3 +253,18 @@ class PatternGame:
         for step in range(1, 6):
             values.append(values[-1] + step)
         return "growing_steps", tuple(str(value) for value in values)
+
+    @staticmethod
+    def _dice_count_up() -> tuple[str, tuple[str, ...]]:
+        return "dice_up", tuple(f"die:{value}" for value in range(1, 7))
+
+    @staticmethod
+    def _dice_count_down() -> tuple[str, tuple[str, ...]]:
+        return "dice_down", tuple(f"die:{value}" for value in range(6, 0, -1))
+
+    @staticmethod
+    def _dice_alternating() -> tuple[str, tuple[str, ...]]:
+        left, right = random.sample(range(1, 7), 2)
+        return "dice_alternating", tuple(
+            f"die:{(left, right)[index % 2]}" for index in range(6)
+        )

@@ -36,9 +36,11 @@ from .forge.models import Frame, Presentation, Scene, SceneFragment
 from .modules import (
     ChineseModule,
     ChecklistModule,
+    CreativeModule,
     HealthModule,
     ImagesModule,
     ItemsModule,
+    LanguageModule,
     MathModule,
     Module,
     TreasureHuntModule,
@@ -60,6 +62,7 @@ class RenderedDisplay:
     item_id: int
     image: Image.Image
     frame: Frame
+    prepared: PreparedScene | None = None
 
 
 @dataclass(frozen=True)
@@ -104,8 +107,10 @@ class DisplayService:
         self.preview_items_module = ItemsModule(RandomSelector())
         self.device_modules: dict[str, Module] = {
             "items": self.device_items_module,
+            "language": LanguageModule(),
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
+            "creative": CreativeModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
@@ -113,8 +118,10 @@ class DisplayService:
         }
         self.preview_modules: dict[str, Module] = {
             "items": self.preview_items_module,
+            "language": LanguageModule(),
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
+            "creative": CreativeModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
@@ -237,6 +244,37 @@ class DisplayService:
         with self._current_display_lock:
             return self._current_display
 
+    def continue_current(self, now: datetime | None = None) -> datetime:
+        """Use the confirmed current CrowPanel image for the next delivery."""
+        now = now or datetime.now()
+        settings = self.settings()
+        if not settings.profile_id.startswith("crowpanel"):
+            raise ValueError("continue current is only supported for CrowPanel")
+        with self._current_display_lock:
+            if self._current_display is None:
+                raise ValueError("device has not confirmed a current display")
+            current = self._current_display
+            image = current.image.copy()
+
+        next_at = self._next_check_at(settings, now)
+        if current.prepared is not None:
+            rendered = self._render_scene(current.prepared, settings, next_at)
+        else:
+            profile = get_device_profile(settings.profile_id)
+            scene_id = (
+                f"continue-current:{current.frame.id}:{next_at.isoformat()}"
+            )
+            rendered = RenderedDisplay(
+                item_id=current.item_id,
+                image=image,
+                frame=self.forge.encode(image, scene_id, profile, now),
+            )
+        with self._delivery_lock:
+            self._pending_display = rendered
+            self._pending_display_key = self._delivery_key(now)
+            self._last_ack = None
+        return next_at
+
     def store_selected_preview(self, rendered: RenderedDisplay) -> str:
         preview_id = rendered.frame.id
         with self._selected_preview_lock:
@@ -271,7 +309,10 @@ class DisplayService:
 
     def refresh_delivery(self, now: datetime | None = None) -> RenderedDisplay:
         """Replace the pending frame so the device's next wake gets fresh state."""
-        self.refresh_prepared_checklists()
+        now = now or datetime.now()
+        if self.display_mode(now) == TASKBOARD_MODE:
+            self._peek_next_scene(self.settings(), now)
+        self.refresh_prepared_checklists(now)
         with self._delivery_lock:
             rendered = self.render(
                 device=True,
@@ -279,7 +320,7 @@ class DisplayService:
                 now=now,
             )
             self._pending_display = rendered
-            self._pending_display_key = self._delivery_key(now or datetime.now())
+            self._pending_display_key = self._delivery_key(now)
             self._last_ack = None
             self._publish_rendered_image(rendered)
             return rendered
@@ -394,7 +435,15 @@ class DisplayService:
     ) -> RenderedDisplay:
         """Preview the taskboard independently of the selected display mode."""
         now = now or datetime.now()
-        return self._render_taskboard_next(self.settings(), now)
+        settings = self.settings()
+        if self._has_forced_scene(settings) or settings.mode == "random":
+            self._peek_next_scene(settings, now)
+            self.refresh_prepared_checklists(now)
+            prepared = self._peek_next_scene(settings, now)
+        else:
+            item = select_scheduled(settings, now.time())
+            prepared = self._scene_for_item(settings, item, now)
+        return self._render_scene(prepared, settings, now)
 
     def preview_next_delivery(self, now: datetime | None = None) -> RenderedDisplay:
         """Preview the pending delivery, or the scene the next GET would consume."""
@@ -439,6 +488,7 @@ class DisplayService:
             item_id=item_id,
             image=output.image,
             frame=output.frame,
+            prepared=prepared,
         )
 
     def _render_treasure_hunt(
@@ -654,8 +704,11 @@ class DisplayService:
             self._publish_rendered_image(rendered)
             return rendered
 
-    def refresh_prepared_checklists(self) -> None:
-        self._refresh_prepared_modules(frozenset({ChecklistModule.name}))
+    def refresh_prepared_checklists(self, now: datetime | None = None) -> None:
+        self._refresh_prepared_modules(
+            frozenset({ChecklistModule.name}),
+            now,
+        )
 
     def refresh_prepared_treasure_hunts(self) -> None:
         now = datetime.now()
@@ -667,7 +720,11 @@ class DisplayService:
             self._last_ack = None
             self._publish_rendered_image(self._pending_display)
 
-    def _refresh_prepared_modules(self, module_names: frozenset[str]) -> None:
+    def _refresh_prepared_modules(
+        self,
+        module_names: frozenset[str],
+        at: datetime | None = None,
+    ) -> None:
         settings = self.settings()
         with self._next_scene_lock:
             if (
@@ -675,7 +732,8 @@ class DisplayService:
                 or self._next_scene_key != self._scene_key(settings)
             ):
                 return
-            at = self._next_scene.scene.target_at or datetime.now()
+            explicit_at = at
+            at = at or self._next_scene.scene.target_at or datetime.now()
             fragments = list(self._next_scene.scene.fragments)
             for index, assignment in enumerate(self._next_scene.panel.slots):
                 if assignment.module not in module_names:
@@ -689,7 +747,10 @@ class DisplayService:
                     assignment.module,
                 )
             self._next_scene = PreparedScene(
-                Scene.create(tuple(fragments), self._next_scene.scene.target_at),
+                Scene.create(
+                    tuple(fragments),
+                    explicit_at or self._next_scene.scene.target_at,
+                ),
                 self._next_scene.panel,
             )
 

@@ -68,6 +68,18 @@ class TemplateTests(unittest.TestCase):
         template = validate_panel(PanelConfig("landscape_1", ()))
         self.assertEqual(template.id, "landscape_1")
 
+    def test_allows_creative_module(self) -> None:
+        template = validate_panel(
+            PanelConfig("landscape_1", (SlotAssignment(1, "creative"),))
+        )
+        self.assertEqual(template.id, "landscape_1")
+
+    def test_allows_language_module(self) -> None:
+        template = validate_panel(
+            PanelConfig("landscape_1", (SlotAssignment(1, "language"),))
+        )
+        self.assertEqual(template.id, "landscape_1")
+
 
 if __name__ == "__main__":
     unittest.main()

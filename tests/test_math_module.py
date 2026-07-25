@@ -112,6 +112,9 @@ class MathModuleTests(unittest.TestCase):
             PatternGame._repeat_words,
             PatternGame._alternating_steps,
             PatternGame._growing_steps,
+            PatternGame._dice_count_up,
+            PatternGame._dice_count_down,
+            PatternGame._dice_alternating,
         )
         for generator in generators:
             family, values = generator()
@@ -140,6 +143,13 @@ class MathModuleTests(unittest.TestCase):
                     tuple(b - a for a, b in zip(numbers, numbers[1:])),
                     (1, 2, 3, 4, 5),
                 )
+            elif family == "dice_up":
+                self.assertEqual(values, tuple(f"die:{value}" for value in range(1, 7)))
+            elif family == "dice_down":
+                self.assertEqual(values, tuple(f"die:{value}" for value in range(6, 0, -1)))
+            elif family == "dice_alternating":
+                self.assertEqual(values[5], values[1])
+                self.assertNotEqual(values[0], values[1])
 
     def test_games_group_rotates_generated_game_types(self) -> None:
         module = MathModule()
@@ -175,6 +185,24 @@ class MathModuleTests(unittest.TestCase):
         rendered = MathModule().render(
             self.settings, content_id, Rect(0, 0, 792, 228), datetime.now()
         )
+        self.assertEqual((rendered.size, rendered.mode), ((792, 228), "1"))
+        self.assertEqual(rendered.getextrema(), (0, 255))
+
+    @unittest.skipUnless(FONT.exists(), "Source Han Sans font is not installed")
+    def test_renders_dice_pattern_graphically(self) -> None:
+        content_id = json.dumps(
+            {
+                "type": "pattern",
+                "family": "dice_up",
+                "items": ["die:1", "die:2", "die:3", "die:4", "die:5"],
+                "answer": "die:6",
+            }
+        )
+
+        rendered = MathModule().render(
+            self.settings, content_id, Rect(0, 0, 792, 228), datetime.now()
+        )
+
         self.assertEqual((rendered.size, rendered.mode), ((792, 228), "1"))
         self.assertEqual(rendered.getextrema(), (0, 255))
 

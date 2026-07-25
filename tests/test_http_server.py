@@ -24,6 +24,7 @@ from home_companian.http_server import (
     parse_item_id,
     parse_checklist_route,
     parse_reward_route,
+    request_source_ip,
     parse_device_route,
     parse_font_name,
     parse_preview_id,
@@ -35,6 +36,17 @@ from home_companian.service import RewardStatus
 class HttpServerTests(unittest.TestCase):
     def test_display_bin_remains_bound_to_wall_panel(self) -> None:
         self.assertEqual(DISPLAY_BIN_DEVICE_ID, "wall_panel")
+
+    def test_request_source_ip_trusts_forwarding_only_from_loopback(self) -> None:
+        self.assertEqual(
+            request_source_ip("127.0.0.1", "192.0.2.10, 127.0.0.1"),
+            "192.0.2.10",
+        )
+        self.assertEqual(
+            request_source_ip("192.0.2.20", "198.51.100.30"),
+            "192.0.2.20",
+        )
+        self.assertEqual(request_source_ip("::1", "bad"), "::1")
 
     def test_parses_device_routes(self) -> None:
         self.assertEqual(
@@ -102,6 +114,9 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn("定时预览".encode(), page)
         self.assertIn("更改".encode(), page)
         self.assertIn("已设为下次刷新".encode(), page)
+        self.assertIn("继续当前".encode(), page)
+        self.assertIn("已沿用到下次刷新".encode(), page)
+        self.assertIn(b"continue-current", page)
         self.assertIn(b'type="time"', page)
         self.assertIn("霞鹜文楷".encode(), page)
         self.assertIn("英文字体".encode(), page)
@@ -115,6 +130,8 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn(b'data-reward-id="toy"', page)
         self.assertIn(b'data-action="redeem-reward"', page)
         self.assertNotIn(b'data-action="redeem-reward" disabled', page)
+        self.assertIn(b"progress.setAttribute('value', String(reward.score))", page)
+        self.assertIn(b"progress.setAttribute('value', '0')", page)
         self.assertIn("寻宝游戏".encode(), page)
         self.assertEqual(page.count(b"<textarea data-treasure-text="), 6)
         self.assertIn(b'data-mode-section-title="treasure_hunt"', page)
@@ -126,6 +143,8 @@ class HttpServerTests(unittest.TestCase):
         )
         self.assertIn(b'data-treasure-rendered-preview', page)
         self.assertIn(b'width="300" height="400"', page)
+        self.assertIn(b'width:min(300px,100%)', page)
+        self.assertIn(b'body { margin:1rem !important; }', page)
 
     def test_index_stacks_crowpanel_then_kindle(self) -> None:
         page = index_html(
@@ -158,6 +177,10 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(page.count("<img data-next-preview"), 2)
         self.assertEqual(page.count("data-next-refresh-time"), 2)
         self.assertIn('data-action="refresh-rendered">手动刷新</button>', page)
+        self.assertEqual(
+            page.count('<button type="button" data-action="continue-current"'),
+            1,
+        )
         self.assertIn('<select data-display-mode>', page)
         self.assertIn('data-action="apply-display-mode">确定</button>', page)
         self.assertIn('data-mode-section-title="taskboard">任务板</h3>', page)
