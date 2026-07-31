@@ -136,8 +136,11 @@ CrowPanel ESP-IDF 客户端已纳入本仓库：`clients/crowpanel/crowpanel-579
 - `GET /v1/treasure-hunt/background?name=...`：返回内容库中的指定寻宝背景 PNG。
 - `GET /v1/treasure-hunt/check.png`：返回带透明通道的完成勾。
 - `GET /v1/treasure-hunt/preview.png`：返回按当前编辑内容渲染的 600×800 Kindle 竖屏预览。
+- `GET /v1/fun-fact/preview.png`：返回当前所选 Fun Fact 的 800×600 Kindle 横屏预览。
+- `GET /v1/fun-facts`：返回 Fun Fact 的标题、无扩展名文件名和当前选择。
 - `POST /v1/treasure-hunt`：原子保存背景和六条线索。
-- `POST /v1/treasure-hunt/mode`：在 `taskboard` 与 `treasure_hunt` 间切换 Kindle 模式，并立即替换待投递 Frame。
+- `POST /v1/treasure-hunt/mode`：在 `taskboard`、`treasure_hunt` 与 `fun_fact` 间切换 Kindle 模式，并立即替换待投递 Frame。
+- `POST /v1/fun-facts/selection`：保存各 Kindle 的 Fun Fact 选择；当前处于该模式时立即替换待投递 Frame。
 - `GET /`：提供简单网页预览和手动刷新入口。
 
 设备接口直接返回排版完成的 framebuffer。ESP32 不负责解析 JSON、字体排版或 PNG 解码。
@@ -327,7 +330,7 @@ panel:
 
 `checklist` 模块通过 slot 的 `group` 引用 `config.yaml` 中的清单 ID，再按配置的任务 ID 和顺序读取 `checklists.csv`，绘制标题、checkbox 和文字。`type=personal` 的完成记录积 1 分，`type=family_task` 积 2 分；所有清单的积分进入同一个余额。Kindle 当前将三组配置清单放在 `landscape_5` 的三个区域，第四区使用 `images` 模块的全 collection 通配轮换。Kindle 客户端不接收或处理 checkbox 事件。
 
-`treasure_hunt` 不参与任务板 panel rotation。用户在网页手动进入该模式后，服务端临时使用 `kindle_6_167ppi` 与 `portrait_1` 生成正向 600×800 PNG；任务板继续使用原来的横屏 profile 和 `landscape_5`，两套方向互不修改。选择的模式按 Kindle Device Instance 写入本地 state，当天持续有效；手动切换或服务器日期进入第二天时恢复任务板。
+`treasure_hunt` 和 `fun_fact` 不参与任务板 panel rotation。寻宝模式临时使用 `kindle_6_167ppi` 与 `portrait_1` 生成正向 600×800 PNG；Fun Fact 使用 Kindle 横屏 profile 和单栏模板，随机选择 `fun_fact/*.md`，并在存在同名图片时将其放在右下角。任务板继续使用原来的横屏 profile 和 `landscape_5`。选择的模式按 Kindle Device Instance 写入本地 state，当天持续有效；手动切换或服务器日期进入第二天时恢复任务板。
 
 Treasure Hunt 的 prepare 阶段把当前背景、六个区域、六条文本和完成状态保存为 Scene snapshot；render 阶段完整保留背景、不裁边，在已完成区域内先按透明通道合成 `check_grey.png`，再绘制文字，因此线索不会被勾遮住。文字在各区域内自动换行，并把字号从 36px 缩小到最低 16px。背景布局属于内容库，因此新增不同构图的背景不需要修改渲染代码。每条文本最长 200 个字符。
 
@@ -359,10 +362,10 @@ Checklist slot 可选配置 `portrait: portraits/<file>.png`。配置后头像�
 
 - 每个 Device Instance 有独立区块，均提供当前画面、下一次刷新时间和下一帧缩略图；只有包含 `items` 模块的 presentation 显示随机预览、定时预览和“更改”。
 - “今日清单”是独立于设备区块的服务端交互区；它写入完成结算、显示玩具进度条，并在满 50 分后允许手动兑换。勾选或兑换都会刷新各设备的下一帧缩略图。
-- Kindle Device 区块提供 `taskboard` / `treasure_hunt` 模式下拉菜单和“确定”按钮；选择生效后，对应的“任务板”或“寻宝游戏”section 标题追加“（当前模式）”。
+- Kindle Device 区块提供 `taskboard` / `treasure_hunt` / `fun_fact` 模式下拉菜单和“确定”按钮；选择生效后，对应 section 标题追加“（当前模式）”。
 - “寻宝游戏”编辑器提供背景下拉菜单、覆盖在背景上的六个多行输入框和六个完成复选框，右侧显示 300×400 的最终 Kindle 竖屏预览。勾选完成会立即保存并更新透明勾预览。模式当天保持，跨日自动回任务板。
 - 随机预览和定时预览不受 YAML 的当前模式限制。
-- 随机预览提供“换一个”按钮，每次选择新的随机项目。
+- 随机预览提供“换一个”按钮，每次选择新的随机布局及内容；“更改”会锁定整个预览场景作为下一屏，因此不含 `items` 的数学、语言和 Creative 布局也可使用。
 - 定时预览提供时间输入和“预览”按钮，可按指定时间模拟定时选择。
 - 手动预览只影响当前网页，不修改 YAML，也不改变 ESP32 的设备结果。刷新网页后恢复真实全局画面。
 - CrowPanel 把最后一次 `/display.bin` 生成的完整画面作为当前画面，因此项目、图片、字体和状态栏都与发给设备的 framebuffer 一致。兼容接口没有 ACK，所以它表示“最后一次发出”，不代表设备已经确认刷新成功。

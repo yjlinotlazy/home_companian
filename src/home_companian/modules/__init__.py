@@ -2,6 +2,8 @@ from .base import Module
 from .checklist import ChecklistModule
 from .chinese import ChineseModule
 from .creative import CreativeModule
+from .detective import DetectiveModule
+from .fun_fact import FunFactModule
 from .images import ImagesModule
 from .health import HealthModule
 from .items import ItemsModule
@@ -12,6 +14,8 @@ from .treasure_hunt import TreasureHuntModule
 __all__ = [
     "ChineseModule",
     "CreativeModule",
+    "DetectiveModule",
+    "FunFactModule",
     "ChecklistModule",
     "HealthModule",
     "ImagesModule",

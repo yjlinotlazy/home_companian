@@ -29,6 +29,7 @@ CROWPANEL_579 = DeviceProfile(
     encoder="crowpanel_1bit",
     mime_type="application/octet-stream",
     capabilities=("monochrome", "deep_sleep"),
+    frame_rotation_degrees=180,
 )
 
 KINDLE_6_167PPI = DeviceProfile(

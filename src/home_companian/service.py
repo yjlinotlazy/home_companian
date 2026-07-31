@@ -25,18 +25,24 @@ from .config import (
     load_config,
 )
 from .display_modes import (
+    DETECTIVE_MODE,
+    FUN_FACT_MODE,
     TASKBOARD_MODE,
     TREASURE_HUNT_MODE,
     DisplayModeStore,
 )
 from .domain import PanelConfig, SlotAssignment
+from .detective import DetectivePuzzle, DetectiveStore
 from .devices import KINDLE_6_167PPI, get_device_profile
 from .forge.engine import Forge
 from .forge.models import Frame, Presentation, Scene, SceneFragment
+from .fun_fact_selection import FunFactSelectionStore
 from .modules import (
     ChineseModule,
     ChecklistModule,
     CreativeModule,
+    DetectiveModule,
+    FunFactModule,
     HealthModule,
     ImagesModule,
     ItemsModule,
@@ -45,6 +51,7 @@ from .modules import (
     Module,
     TreasureHuntModule,
 )
+from .modules.fun_fact import FunFact, load_fun_facts
 from .treasure_hunt import TreasureHunt, TreasureHuntBackground, TreasureHuntStore
 from .selection import RandomSelector, select_scheduled
 from .status_modules import (
@@ -103,6 +110,9 @@ class DisplayService:
         self.display_mode_store = DisplayModeStore(
             self.current_display_path.parent / f"mode-{self.device_id}.yaml"
         )
+        self.fun_fact_selection_store = FunFactSelectionStore(
+            self.current_display_path.parent / f"fun-fact-{self.device_id}.yaml"
+        )
         self.device_items_module = ItemsModule(RandomSelector())
         self.preview_items_module = ItemsModule(RandomSelector())
         self.device_modules: dict[str, Module] = {
@@ -111,6 +121,8 @@ class DisplayService:
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
             "creative": CreativeModule(),
+            "detective": DetectiveModule(),
+            "fun_fact": FunFactModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
@@ -122,6 +134,8 @@ class DisplayService:
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
             "creative": CreativeModule(),
+            "detective": DetectiveModule(),
+            "fun_fact": FunFactModule(),
             "images": ImagesModule(),
             "health": HealthModule(),
             "math": MathModule(),
@@ -185,6 +199,16 @@ class DisplayService:
         now = now or datetime.now()
         if device and self.display_mode(now) == TREASURE_HUNT_MODE:
             rendered = self._render_treasure_hunt(settings, now)
+            if remember_device:
+                self._remember_current(rendered)
+            return rendered
+        if device and self.display_mode(now) == FUN_FACT_MODE:
+            rendered = self._render_fun_fact(settings, now)
+            if remember_device:
+                self._remember_current(rendered)
+            return rendered
+        if device and self.display_mode(now) == DETECTIVE_MODE:
+            rendered = self._render_detective(settings, now)
             if remember_device:
                 self._remember_current(rendered)
             return rendered
@@ -412,6 +436,10 @@ class DisplayService:
         now = now or datetime.now()
         if self.display_mode(now) == TREASURE_HUNT_MODE:
             return self._render_treasure_hunt(settings, now)
+        if self.display_mode(now) == FUN_FACT_MODE:
+            return self._render_fun_fact(settings, now)
+        if self.display_mode(now) == DETECTIVE_MODE:
+            return self._render_detective(settings, now)
         return self._render_taskboard_next(settings, now)
 
     def _render_taskboard_next(
@@ -514,6 +542,48 @@ class DisplayService:
         )
         return self._render_scene(prepared, portrait_settings, now)
 
+    def _render_fun_fact(
+        self,
+        settings: Settings,
+        now: datetime,
+    ) -> RenderedDisplay:
+        fact_name = self.selected_fun_fact()
+        panel = PanelConfig(
+            "kindle_landscape_1",
+            (SlotAssignment(1, FunFactModule.name, (("name", fact_name),)),),
+        )
+        prepared = self._prepare_panel(
+            settings,
+            now,
+            panel,
+            self.device_modules,
+        )
+        return self._render_scene(prepared, settings, now)
+
+    def _render_detective(
+        self,
+        settings: Settings,
+        now: datetime,
+        preview: bool = False,
+    ) -> RenderedDisplay:
+        panel = PanelConfig(
+            "kindle_landscape_1",
+            (
+                SlotAssignment(
+                    1,
+                    DetectiveModule.name,
+                    (("preview", "true"),) if preview else (),
+                ),
+            ),
+        )
+        prepared = self._prepare_panel(
+            settings,
+            now,
+            panel,
+            self.device_modules,
+        )
+        return self._render_scene(prepared, settings, now)
+
     def _delivery_key(self, now: datetime) -> tuple[object, ...]:
         return (now.date(), self.display_mode(now))
 
@@ -555,6 +625,31 @@ class DisplayService:
             self._next_scene = self._scene_for_item(settings, item, next_at)
             self._next_scene_key = self._scene_key(settings)
             self._next_scene_forced = True
+        with self._delivery_lock:
+            self._pending_display = None
+            self._pending_display_key = None
+            self._last_ack = None
+        return next_at
+
+    def change_preview(
+        self,
+        preview_id: str,
+        now: datetime | None = None,
+    ) -> datetime:
+        rendered = self.selected_preview(preview_id)
+        if rendered.prepared is None:
+            raise ValueError("selected preview cannot be scheduled")
+        now = now or datetime.now()
+        settings = self.settings()
+        next_at = self._next_check_at(settings, now)
+        with self._next_scene_lock:
+            self._next_scene = rendered.prepared
+            self._next_scene_key = self._scene_key(settings)
+            self._next_scene_forced = True
+        with self._delivery_lock:
+            self._pending_display = None
+            self._pending_display_key = None
+            self._last_ack = None
         return next_at
 
     def select_font(self, group: str, name: str) -> Path:
@@ -676,6 +771,70 @@ class DisplayService:
             raise ValueError("treasure hunt preview requires a Kindle device")
         return self._render_treasure_hunt(settings, now or datetime.now())
 
+    def render_fun_fact_preview(
+        self,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            raise ValueError("fun fact preview requires a Kindle device")
+        return self._render_fun_fact(settings, now or datetime.now())
+
+    def detective(self) -> DetectivePuzzle:
+        return DetectiveStore(self.settings().library_dir).load()
+
+    def save_detective(
+        self,
+        title: object,
+        mystery: object,
+        answer: object,
+        hints: object,
+        visible: object = None,
+    ) -> DetectivePuzzle:
+        return DetectiveStore(self.settings().library_dir).save(
+            title,
+            mystery,
+            answer,
+            hints,
+            visible,
+        )
+
+    def render_detective_preview(
+        self,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        settings = self.settings()
+        if not settings.profile_id.startswith("kindle_"):
+            raise ValueError("detective preview requires a Kindle device")
+        return self._render_detective(
+            settings,
+            now or datetime.now(),
+            preview=True,
+        )
+
+    def fun_facts(self) -> tuple[FunFact, ...]:
+        return load_fun_facts(self.settings().library_dir)
+
+    def selected_fun_fact(self) -> str:
+        facts = self.fun_facts()
+        selected = self.fun_fact_selection_store.selected()
+        if selected is not None and any(fact.name == selected for fact in facts):
+            return selected
+        return facts[0].name
+
+    def select_fun_fact(
+        self,
+        name: str,
+        now: datetime | None = None,
+    ) -> RenderedDisplay:
+        if not any(fact.name == name for fact in self.fun_facts()):
+            raise ValueError(f"unknown fun fact: {name}")
+        self.fun_fact_selection_store.select(name)
+        now = now or datetime.now()
+        if self.display_mode(now) == FUN_FACT_MODE:
+            return self.refresh_delivery(now)
+        return self.render_fun_fact_preview(now)
+
     def display_mode(self, now: datetime | None = None) -> str:
         settings = self.settings()
         if not settings.profile_id.startswith("kindle_"):
@@ -716,6 +875,16 @@ class DisplayService:
             return
         with self._delivery_lock:
             self._pending_display = self._render_treasure_hunt(self.settings(), now)
+            self._pending_display_key = self._delivery_key(now)
+            self._last_ack = None
+            self._publish_rendered_image(self._pending_display)
+
+    def refresh_prepared_detectives(self) -> None:
+        now = datetime.now()
+        if self.display_mode(now) != DETECTIVE_MODE:
+            return
+        with self._delivery_lock:
+            self._pending_display = self._render_detective(self.settings(), now)
             self._pending_display_key = self._delivery_key(now)
             self._last_ack = None
             self._publish_rendered_image(self._pending_display)

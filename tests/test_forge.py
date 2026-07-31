@@ -46,11 +46,10 @@ class ForgeTests(unittest.TestCase):
     def test_crowpanel_encoder_maps_visible_corners_with_rotation(self) -> None:
         image = Image.new("1", (CROWPANEL_579.width, CROWPANEL_579.height), 1)
         image.putpixel((0, 0), 0)
-        image.putpixel((791, 271), 0)
         payload = CrowPanel1BitEncoder().encode(image, CROWPANEL_579)
 
-        self.assertEqual(payload[27199] & 0x01, 0)
         self.assertEqual(payload[0] & 0x80, 0)
+        self.assertNotEqual(payload[27199] & 0x01, 0)
 
     def test_png_encoder_and_frame_identity(self) -> None:
         profile = type(CROWPANEL_579)(

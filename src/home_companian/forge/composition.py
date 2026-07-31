@@ -60,7 +60,10 @@ def compose_scene(
     for x1, y1, x2, y2 in template.lines:
         offset = profile.status_bar_height
         draw.line((x1, y1 + offset, x2, y2 + offset), fill=0, width=2)
-    if not any(fragment.module == "treasure_hunt" for fragment in scene.fragments):
+    if not any(
+        fragment.module in {"treasure_hunt", "fun_fact", "detective"}
+        for fragment in scene.fragments
+    ):
         _add_kindle_decorations(image, settings.library_dir, profile)
     return image
 

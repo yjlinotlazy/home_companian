@@ -144,6 +144,7 @@ class Settings:
     display_profiles: tuple[DisplayProfile, ...] = ()
     reward: RewardConfig = DEFAULT_REWARD
     checklist_groups: tuple[ChecklistGroup, ...] = ()
+    detective_bulbs: tuple[Path, ...] = ()
 
     @property
     def panel(self) -> PanelConfig:
@@ -190,6 +191,7 @@ class Config:
     default_device: str
     reward: RewardConfig = DEFAULT_REWARD
     checklist_groups: tuple[ChecklistGroup, ...] = ()
+    detective_bulbs: tuple[Path, ...] = ()
 
     def for_device(self, device_id: str) -> Settings:
         device = next(
@@ -228,6 +230,7 @@ class Config:
             display_profiles=device.presentation.display_profiles,
             reward=self.reward,
             checklist_groups=self.checklist_groups,
+            detective_bulbs=self.detective_bulbs,
         )
 
 
@@ -780,6 +783,17 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     reward = _load_reward(root)
     checklist_groups = _load_checklist_groups(root)
     library_dir = _configured_path(root.get("library_dir"), "library_dir", path)
+    raw_detective_bulbs = root.get("detective_bulbs", [])
+    if not isinstance(raw_detective_bulbs, list) or not all(
+        isinstance(value, str) and value.strip() for value in raw_detective_bulbs
+    ):
+        raise ConfigError("detective_bulbs must be a list of paths")
+    detective_bulbs = tuple(
+        _configured_path(value, f"detective_bulbs[{index}]", path)
+        for index, value in enumerate(raw_detective_bulbs)
+    )
+    if detective_bulbs and len(detective_bulbs) != 3:
+        raise ConfigError("detective_bulbs must contain exactly three paths")
     items = _load_items(library_dir)
     item_ids = {item.id for item in items}
 
@@ -818,4 +832,5 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         default_device=default_device,
         reward=reward,
         checklist_groups=checklist_groups,
+        detective_bulbs=detective_bulbs,
     )

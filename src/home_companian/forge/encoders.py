@@ -58,6 +58,16 @@ class CrowPanel1BitEncoder:
                 f"image must be {profile.width}x{profile.height}, "
                 f"got {image.width}x{image.height}"
             )
+        rotations = {
+            0: None,
+            180: Image.Transpose.ROTATE_180,
+        }
+        try:
+            transpose = rotations[profile.frame_rotation_degrees]
+        except KeyError as exc:
+            raise ValueError("CrowPanel frame rotation must be 0 or 180 degrees") from exc
+        if transpose is not None:
+            image = image.transpose(transpose)
         framebuffer_size = self.memory_width * profile.height // 8
         monochrome = image.convert("L").point(
             lambda pixel: 255 if pixel > self.threshold else 0

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from .checklists import ChecklistItem
 from .config import ConfigError, FontChoice, load_config
 from .devices import get_device_profile
-from .display_modes import TASKBOARD_MODE, TREASURE_HUNT_MODE
+from .display_modes import DISPLAY_MODES, TASKBOARD_MODE
 from .service import DisplayService, RenderedDisplay, RewardStatus
 
 
@@ -87,6 +87,18 @@ def treasure_hunt_payload(
     }
 
 
+def detective_payload(service: DisplayService, mode: str) -> dict[str, object]:
+    puzzle = service.detective()
+    return {
+        "title": puzzle.title,
+        "mystery": puzzle.mystery,
+        "answer": puzzle.answer,
+        "hints": list(puzzle.hints),
+        "visible": list(puzzle.visible),
+        "mode": mode,
+    }
+
+
 def index_html(
     fonts: tuple[FontChoice, ...],
     selected_font: Path,
@@ -138,6 +150,8 @@ def index_html(
       <label>当前模式 <select data-display-mode>
         <option value="taskboard">任务板</option>
         <option value="treasure_hunt">寻宝游戏</option>
+        <option value="fun_fact">Fun Fact</option>
+        <option value="detective">侦探</option>
       </select></label>
       <button type="button" data-action="apply-display-mode">确定</button>
       <span data-display-mode-status></span>
@@ -238,6 +252,38 @@ def index_html(
   <span data-treasure-status></span>
 </div>
 </section>"""
+    fun_fact_controls = """<section class="fun-fact-controls">
+<h2 data-mode-section-title="fun_fact">Fun Fact</h2>
+<div class="fun-fact-selection">
+  <select data-fun-fact-select aria-label="Fun Fact"></select>
+  <span data-fun-fact-status></span>
+</div>
+<img data-fun-fact-preview src="/v1/fun-fact/preview.png"
+     width="800" height="600" alt="Kindle Fun Fact 预览">
+</section>"""
+    detective_controls = """<section class="detective-controls">
+<h2 data-mode-section-title="detective">侦探</h2>
+<div class="detective-layout">
+  <img data-detective-preview src="/v1/detective/preview.png"
+       width="800" height="600" alt="Kindle 侦探模式预览">
+  <div class="detective-form">
+    <div class="detective-fields">
+      <label>标题（可选） <input data-detective-title maxlength="100"></label>
+      <label>案情 <textarea data-detective-mystery maxlength="1200"></textarea></label>
+      <label>谜底 <textarea data-detective-answer maxlength="1200"></textarea></label>
+      <fieldset>
+        <legend>线索</legend>
+        <div data-detective-hints></div>
+        <button type="button" data-detective-add aria-label="增加线索">＋</button>
+      </fieldset>
+    </div>
+    <div class="detective-actions">
+      <button type="button" data-detective-save>保存</button>
+      <span data-detective-status></span>
+    </div>
+  </div>
+</div>
+</section>"""
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -267,6 +313,21 @@ def index_html(
 .treasure-hunt-actions {{ display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-top:.75rem; }}
 .treasure-rendered-preview {{ margin-top:.75rem; }}
 .treasure-rendered-preview img {{ display:block; width:min(300px,100%); max-width:100%; height:auto; box-sizing:border-box; border:1px solid #aaa; }}
+.fun-fact-controls {{ margin-top:2rem; width:min(800px,100%); }}
+.fun-fact-selection {{ display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }}
+.fun-fact-selection select, .fun-fact-selection span {{ font:inherit; font-size:1rem; line-height:1.3; }}
+.fun-fact-controls img {{ display:block; width:100%; height:auto; box-sizing:border-box; margin-top:.75rem; border:1px solid #aaa; }}
+.detective-controls {{ margin-top:2rem; width:min(1236px,100%); }}
+.detective-layout {{ display:grid; grid-template-columns:minmax(500px,800px) minmax(320px,420px); gap:1rem; align-items:start; }}
+.detective-layout > img {{ display:block; width:100%; height:auto; box-sizing:border-box; border:1px solid #aaa; }}
+.detective-form {{ min-width:0; }}
+.detective-fields {{ display:grid; gap:.65rem; }}
+.detective-fields > label {{ display:grid; grid-template-columns:6rem minmax(0,1fr); gap:.5rem; align-items:start; }}
+.detective-fields input, .detective-fields textarea {{ box-sizing:border-box; width:100%; font:inherit; }}
+.detective-fields textarea {{ min-height:6rem; resize:vertical; }}
+.detective-hint-row {{ display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:.4rem; margin-bottom:.4rem; }}
+.detective-hint-row input {{ min-width:0; }}
+.detective-actions {{ display:flex; align-items:center; gap:.5rem; margin-top:.75rem; }}
 .checklist-grid {{ display:grid; grid-template-columns:repeat(3,minmax(140px,190px)); gap:.5rem; justify-content:start; }}
 .checklist-grid fieldset {{ display:grid; gap:.3rem; margin:0; padding:.35rem .55rem .5rem; }}
 .checklist-grid label {{ white-space:nowrap; }}
@@ -279,12 +340,17 @@ def index_html(
   .treasure-hunt-layout {{ grid-template-columns:minmax(0,1fr); }}
   .checklist-grid {{ grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }}
 }}
+@media (max-width: 1050px) {{
+  .detective-layout {{ grid-template-columns:minmax(0,800px); }}
+}}
 </style></head>
 <body style="font-family:sans-serif;margin:2rem;background:#eee">
   <h1>Home Companian</h1>
   {device_sections}
   {checklist_controls}
   {treasure_hunt_controls}
+  {fun_fact_controls}
+  {detective_controls}
   {font_controls}
 <script>
 const nextRefreshTimers = new Map();
@@ -302,9 +368,13 @@ function updateDisplayModeUI(mode) {{
     select.value = mode;
   }});
   document.querySelectorAll('[data-mode-section-title]').forEach(title => {{
-    const label = title.dataset.modeSectionTitle === 'taskboard'
-      ? '任务板'
-      : '寻宝游戏';
+    const labels = {{
+      taskboard: '任务板',
+      treasure_hunt: '寻宝游戏',
+      fun_fact: 'Fun Fact',
+      detective: '侦探'
+    }};
+    const label = labels[title.dataset.modeSectionTitle];
     title.textContent = title.dataset.modeSectionTitle === mode
       ? label + '（当前模式）'
       : label;
@@ -316,13 +386,9 @@ async function preview(section, query) {{
   if (!response.ok) throw new Error(await response.text());
   const selection = await response.json();
   section.querySelector('[data-current-preview]').src = refreshed(selection.image_url);
-  const canChange = Number.isInteger(selection.item_id) && selection.item_id > 0;
-  if (canChange) section.dataset.previewItemId = selection.item_id;
-  else delete section.dataset.previewItemId;
-  section.querySelector('[data-action="change"]').disabled = !canChange;
-  section.querySelector('[data-change-status]').textContent = canChange
-    ? '仅预览'
-    : '仅预览（此布局不能更改）';
+  section.dataset.previewId = selection.preview_id;
+  section.querySelector('[data-action="change"]').disabled = false;
+  section.querySelector('[data-change-status]').textContent = '仅预览';
 }}
 
 async function loadNextRefresh(section) {{
@@ -404,14 +470,14 @@ document.querySelectorAll('.device-section').forEach(section => {{
       if (value) preview(section, 'time=' + encodeURIComponent(value));
     }});
     section.querySelector('[data-action="change"]').addEventListener('click', async () => {{
-      const itemId = section.dataset.previewItemId;
-      if (!itemId) return;
+      const previewId = section.dataset.previewId;
+      if (!previewId) return;
       const response = await fetch(
-        devicePath(section, 'change') + '?item=' + encodeURIComponent(itemId),
+        devicePath(section, 'change') + '?id=' + encodeURIComponent(previewId),
         {{method: 'POST'}}
       );
       if (!response.ok) throw new Error(await response.text());
-      delete section.dataset.previewItemId;
+      delete section.dataset.previewId;
       section.querySelector('[data-action="change"]').disabled = true;
       section.querySelector('[data-change-status]').textContent = '已设为下次刷新';
       loadNextRefresh(section);
@@ -599,7 +665,155 @@ document.querySelectorAll('[data-treasure-completed]').forEach(checkbox => {{
   }});
 }});
 
+let funFactStatusTimer;
+
+async function loadFunFacts() {{
+  const status = document.querySelector('[data-fun-fact-status]');
+  try {{
+    const response = await fetch('/v1/fun-facts');
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    const select = document.querySelector('[data-fun-fact-select]');
+    select.replaceChildren(...result.facts.map(fact => {{
+      const option = document.createElement('option');
+      option.value = fact.name;
+      option.textContent = fact.title + ' (' + fact.name + ')';
+      return option;
+    }}));
+    select.value = result.selected;
+    status.textContent = '';
+  }} catch (error) {{
+    status.textContent = error.message;
+  }}
+}}
+
+document.querySelector('[data-fun-fact-select]').addEventListener('change', async event => {{
+  const status = document.querySelector('[data-fun-fact-status]');
+  const select = event.currentTarget;
+  window.clearTimeout(funFactStatusTimer);
+  status.textContent = '';
+  select.disabled = true;
+  try {{
+    const response = await fetch('/v1/fun-facts/selection', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{name: select.value}})
+    }});
+    if (!response.ok) throw new Error(await response.text());
+    document.querySelector('[data-fun-fact-preview]').src = refreshed(
+      '/v1/fun-fact/preview.png'
+    );
+    status.textContent = '已保存';
+    funFactStatusTimer = window.setTimeout(() => {{
+      if (status.textContent === '已保存') status.textContent = '';
+    }}, 2000);
+  }} catch (error) {{
+    status.textContent = error.message;
+  }} finally {{
+    select.disabled = false;
+  }}
+}});
+
+const detectiveHints = document.querySelector('[data-detective-hints]');
+
+function setDetectiveHintVisibility(row, visible) {{
+  row.dataset.visible = visible ? 'true' : 'false';
+  row.classList.toggle('is-hidden', !visible);
+  row.querySelector('[data-detective-visibility]').textContent = visible ? '隐藏' : '显示';
+}}
+
+function addDetectiveHint(value = '', visible = false) {{
+  const row = document.createElement('div');
+  row.className = 'detective-hint-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 300;
+  input.value = value;
+  input.setAttribute('data-detective-hint', '');
+  input.setAttribute('aria-label', '线索');
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.textContent = '−';
+  remove.setAttribute('aria-label', '删除线索');
+  remove.addEventListener('click', () => {{
+    if (detectiveHints.children.length > 1) row.remove();
+  }});
+  const visibility = document.createElement('button');
+  visibility.type = 'button';
+  visibility.setAttribute('data-detective-visibility', '');
+  visibility.addEventListener('click', async () => {{
+    const wasVisible = row.dataset.visible === 'true';
+    setDetectiveHintVisibility(row, !wasVisible);
+    visibility.disabled = true;
+    try {{
+      await saveDetective('显示状态已保存');
+    }} catch (error) {{
+      setDetectiveHintVisibility(row, wasVisible);
+      document.querySelector('[data-detective-status]').textContent = error.message;
+    }} finally {{
+      visibility.disabled = false;
+    }}
+  }});
+  row.append(input, remove, visibility);
+  detectiveHints.append(row);
+  setDetectiveHintVisibility(row, visible);
+}}
+
+async function loadDetective() {{
+  const status = document.querySelector('[data-detective-status]');
+  try {{
+    const response = await fetch('/v1/detective');
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    document.querySelector('[data-detective-title]').value = result.title;
+    document.querySelector('[data-detective-mystery]').value = result.mystery;
+    document.querySelector('[data-detective-answer]').value = result.answer;
+    detectiveHints.replaceChildren();
+    result.hints.forEach((hint, index) => addDetectiveHint(hint, result.visible[index]));
+    updateDisplayModeUI(result.mode);
+    status.textContent = '';
+  }} catch (error) {{
+    status.textContent = error.message;
+  }}
+}}
+
+document.querySelector('[data-detective-add]').addEventListener('click', () => {{
+  if (detectiveHints.children.length < 24) addDetectiveHint();
+}});
+
+async function saveDetective(message = '已保存') {{
+  const status = document.querySelector('[data-detective-status]');
+  const rows = Array.from(detectiveHints.querySelectorAll('.detective-hint-row'));
+  const response = await fetch('/v1/detective', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{
+      title: document.querySelector('[data-detective-title]').value,
+      mystery: document.querySelector('[data-detective-mystery]').value,
+      answer: document.querySelector('[data-detective-answer]').value,
+      hints: rows.map(row => row.querySelector('[data-detective-hint]').value),
+      visible: rows.map(row => row.dataset.visible === 'true')
+    }})
+  }});
+  if (!response.ok) throw new Error(await response.text());
+  document.querySelector('[data-detective-preview]').src = refreshed(
+    '/v1/detective/preview.png'
+  );
+  status.textContent = message;
+  document.querySelectorAll('.device-section').forEach(loadNextRefresh);
+}}
+
+document.querySelector('[data-detective-save]').addEventListener('click', async () => {{
+  try {{
+    await saveDetective();
+  }} catch (error) {{
+    document.querySelector('[data-detective-status]').textContent = error.message;
+  }}
+}});
+
 loadTreasureHunt();
+loadFunFacts();
+loadDetective();
 </script>
 </body>
 </html>
@@ -716,6 +930,11 @@ class DeviceServices:
         for device in configured.devices:
             self.get(device.id).refresh_prepared_treasure_hunts()
 
+    def refresh_prepared_detectives(self) -> None:
+        configured = load_config(self.config_path)
+        for device in configured.devices:
+            self.get(device.id).refresh_prepared_detectives()
+
     def kindle_mode(self) -> str:
         configured = load_config(self.config_path)
         kindle = next(
@@ -751,6 +970,65 @@ class DeviceServices:
         if kindle is None:
             raise ValueError("treasure hunt preview requires a Kindle device")
         return self.get(kindle.id).render_treasure_hunt_preview()
+
+    def fun_fact_preview(self) -> RenderedDisplay:
+        configured = load_config(self.config_path)
+        kindle = next(
+            (
+                device
+                for device in configured.devices
+                if device.profile.startswith("kindle_")
+            ),
+            None,
+        )
+        if kindle is None:
+            raise ValueError("fun fact preview requires a Kindle device")
+        return self.get(kindle.id).render_fun_fact_preview()
+
+    def detective_preview(self) -> RenderedDisplay:
+        configured = load_config(self.config_path)
+        kindle = next(
+            (
+                device
+                for device in configured.devices
+                if device.profile.startswith("kindle_")
+            ),
+            None,
+        )
+        if kindle is None:
+            raise ValueError("detective preview requires a Kindle device")
+        return self.get(kindle.id).render_detective_preview()
+
+    def fun_facts_payload(self) -> dict[str, object]:
+        configured = load_config(self.config_path)
+        kindle = next(
+            (
+                device
+                for device in configured.devices
+                if device.profile.startswith("kindle_")
+            ),
+            None,
+        )
+        if kindle is None:
+            raise ValueError("fun facts require a Kindle device")
+        service = self.get(kindle.id)
+        return {
+            "facts": [
+                {"name": fact.name, "title": fact.title}
+                for fact in service.fun_facts()
+            ],
+            "selected": service.selected_fun_fact(),
+        }
+
+    def select_kindles_fun_fact(self, name: str) -> tuple[str, ...]:
+        configured = load_config(self.config_path)
+        selected: list[str] = []
+        for device in configured.devices:
+            if not device.profile.startswith("kindle_"):
+                continue
+            self.get(device.id).select_fun_fact(name)
+            selected.append(device.id)
+        return tuple(selected)
 
 
 def make_handler(
@@ -821,6 +1099,7 @@ def make_handler(
                         HTTPStatus.OK,
                         {
                             "item_id": rendered.item_id or None,
+                            "preview_id": preview_id,
                             "image_url": (
                                 f"/v1/devices/{encoded_id}/selected-preview.png?"
                                 f"{urlencode({'id': preview_id})}"
@@ -922,6 +1201,30 @@ def make_handler(
                         "image/png",
                         device_preview_png(rendered),
                     )
+                elif request.path == "/v1/fun-fact/preview.png":
+                    rendered = device_services.fun_fact_preview()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                    )
+                elif request.path == "/v1/detective":
+                    self._send_json(
+                        HTTPStatus.OK,
+                        detective_payload(service, device_services.kindle_mode()),
+                    )
+                elif request.path == "/v1/detective/preview.png":
+                    rendered = device_services.detective_preview()
+                    self._send(
+                        HTTPStatus.OK,
+                        "image/png",
+                        device_preview_png(rendered),
+                    )
+                elif request.path == "/v1/fun-facts":
+                    self._send_json(
+                        HTTPStatus.OK,
+                        device_services.fun_facts_payload(),
+                    )
                 elif request.path == "/":
                     config = service.config()
                     settings = config.for_device(config.default_device)
@@ -1002,13 +1305,27 @@ def make_handler(
                     device_services.get(ack_device_id).acknowledge(frame_id, status)
                     self._send_json(HTTPStatus.OK, {"frame_id": frame_id, "status": status})
                 elif change_device_id is not None:
-                    item_id = parse_item_id(request.query)
-                    if item_id is None:
-                        raise ValueError("item must be provided")
-                    next_at = device_services.get(change_device_id).change(item_id)
+                    values = parse_qs(request.query)
+                    service_for_device = device_services.get(change_device_id)
+                    if "id" in values:
+                        preview_id = parse_preview_id(request.query)
+                        next_at = service_for_device.change_preview(preview_id)
+                        payload = {
+                            "preview_id": preview_id,
+                            "next_at": next_at.isoformat(),
+                        }
+                    else:
+                        item_id = parse_item_id(request.query)
+                        if item_id is None:
+                            raise ValueError("preview id or item must be provided")
+                        next_at = service_for_device.change(item_id)
+                        payload = {
+                            "item_id": item_id,
+                            "next_at": next_at.isoformat(),
+                        }
                     self._send_json(
                         HTTPStatus.OK,
-                        {"item_id": item_id, "next_at": next_at.isoformat()},
+                        payload,
                     )
                 elif continue_device_id is not None:
                     next_at = device_services.get(
@@ -1058,12 +1375,24 @@ def make_handler(
                 elif request.path == "/v1/treasure-hunt/mode":
                     body = self._read_json()
                     mode = body.get("mode")
-                    if mode not in {TASKBOARD_MODE, TREASURE_HUNT_MODE}:
-                        raise ValueError("mode must be taskboard or treasure_hunt")
+                    if mode not in DISPLAY_MODES:
+                        raise ValueError(
+                            "mode must be taskboard, treasure_hunt, fun_fact, or detective"
+                        )
                     devices = device_services.select_kindles_mode(mode)
                     self._send_json(
                         HTTPStatus.OK,
                         {"mode": mode, "devices": devices},
+                    )
+                elif request.path == "/v1/fun-facts/selection":
+                    body = self._read_json()
+                    name = body.get("name")
+                    if not isinstance(name, str) or not name:
+                        raise ValueError("fun fact name must be provided")
+                    devices = device_services.select_kindles_fun_fact(name)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"name": name, "devices": devices},
                     )
                 elif request.path == "/v1/treasure-hunt":
                     body = self._read_json()
@@ -1078,6 +1407,20 @@ def make_handler(
                         device_services.kindle_mode(),
                     )
                     self._send_json(HTTPStatus.OK, payload)
+                elif request.path == "/v1/detective":
+                    body = self._read_json()
+                    service.save_detective(
+                        body.get("title"),
+                        body.get("mystery"),
+                        body.get("answer"),
+                        body.get("hints"),
+                        body.get("visible"),
+                    )
+                    device_services.refresh_prepared_detectives()
+                    self._send_json(
+                        HTTPStatus.OK,
+                        detective_payload(service, device_services.kindle_mode()),
+                    )
                 elif request.path == "/font":
                     group = parse_qs(request.query).get("group", [None])[0]
                     if group is None:

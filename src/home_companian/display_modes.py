@@ -13,7 +13,11 @@ from .config import ConfigError
 
 TASKBOARD_MODE = "taskboard"
 TREASURE_HUNT_MODE = "treasure_hunt"
-DISPLAY_MODES = frozenset({TASKBOARD_MODE, TREASURE_HUNT_MODE})
+FUN_FACT_MODE = "fun_fact"
+DETECTIVE_MODE = "detective"
+DISPLAY_MODES = frozenset(
+    {TASKBOARD_MODE, TREASURE_HUNT_MODE, FUN_FACT_MODE, DETECTIVE_MODE}
+)
 _MODE_LOCK = Lock()
 
 

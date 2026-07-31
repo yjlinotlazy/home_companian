@@ -114,6 +114,9 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn("定时预览".encode(), page)
         self.assertIn("更改".encode(), page)
         self.assertIn("已设为下次刷新".encode(), page)
+        self.assertNotIn("此布局不能更改".encode(), page)
+        self.assertIn(b"selection.preview_id", page)
+        self.assertIn(b"'change') + '?id='", page)
         self.assertIn("继续当前".encode(), page)
         self.assertIn("已沿用到下次刷新".encode(), page)
         self.assertIn(b"continue-current", page)
@@ -144,6 +147,22 @@ class HttpServerTests(unittest.TestCase):
         self.assertIn(b'data-treasure-rendered-preview', page)
         self.assertIn(b'width="300" height="400"', page)
         self.assertIn(b'width:min(300px,100%)', page)
+        self.assertIn(b'data-mode-section-title="fun_fact"', page)
+        self.assertIn(b'data-fun-fact-preview', page)
+        self.assertIn(b'data-fun-fact-select', page)
+        self.assertNotIn(b'data-fun-fact-confirm', page)
+        self.assertNotIn(b'>\xe7\xa1\xae\xe8\xae\xa4</button>', page)
+        self.assertIn(b"status.textContent = '\xe5\xb7\xb2\xe4\xbf\x9d\xe5\xad\x98'", page)
+        self.assertIn(b'}, 2000);', page)
+        self.assertNotIn(b'<label>\xe5\x86\x85\xe5\xae\xb9 ', page)
+        self.assertIn(
+            b'.fun-fact-selection select, .fun-fact-selection span',
+            page,
+        )
+        self.assertIn(b'/v1/fun-fact/preview.png', page)
+        self.assertIn(b'/v1/fun-facts/selection', page)
+        self.assertIn(b"fact.title + ' (' + fact.name + ')'", page)
+        self.assertIn(b'width="800" height="600"', page)
         self.assertIn(b'body { margin:1rem !important; }', page)
 
     def test_index_stacks_crowpanel_then_kindle(self) -> None:
@@ -182,6 +201,7 @@ class HttpServerTests(unittest.TestCase):
             1,
         )
         self.assertIn('<select data-display-mode>', page)
+        self.assertIn('<option value="fun_fact">Fun Fact</option>', page)
         self.assertIn('data-action="apply-display-mode">确定</button>', page)
         self.assertIn('data-mode-section-title="taskboard">任务板</h3>', page)
         self.assertIn("--preview-width:396px", page)

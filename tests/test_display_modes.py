@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -6,6 +7,7 @@ import unittest
 from PIL import Image
 
 from home_companian.display_modes import (
+    FUN_FACT_MODE,
     TASKBOARD_MODE,
     TREASURE_HUNT_MODE,
     DisplayModeStore,
@@ -26,6 +28,8 @@ class DisplayModeStoreTests(unittest.TestCase):
             store.select(TREASURE_HUNT_MODE, first_day)
             self.assertEqual(store.selected(first_day), TREASURE_HUNT_MODE)
             self.assertEqual(store.selected(date(2026, 7, 23)), TASKBOARD_MODE)
+            store.select(FUN_FACT_MODE, first_day)
+            self.assertEqual(store.selected(first_day), FUN_FACT_MODE)
 
 
 @unittest.skipUnless(Path(FONT).exists(), "Source Han Sans font is not installed")
@@ -35,6 +39,19 @@ class KindleDisplayModeTests(unittest.TestCase):
         root = Path(self.temporary_directory.name)
         (root / "items.csv").write_text(
             "id,type,text\n1,personal,Task board\n",
+            encoding="utf-8",
+        )
+        fun_fact_dir = root / "fun_fact"
+        fun_fact_dir.mkdir()
+        (fun_fact_dir / "sample.md").write_text(
+            "# Sample Fun Fact\n\n- First fact\n- Second fact\n",
+            encoding="utf-8",
+        )
+        Image.new("RGBA", (120, 90), (220, 220, 220, 255)).save(
+            fun_fact_dir / "sample.png"
+        )
+        (fun_fact_dir / "second.md").write_text(
+            "# Second Fact\n\n- Another fact\n",
             encoding="utf-8",
         )
         background_dir = root / "treasure_hunt" / "background"
@@ -120,6 +137,35 @@ class KindleDisplayModeTests(unittest.TestCase):
 
         self.assertEqual(taskboard.frame.profile_id, "kindle_6_167ppi_landscape")
         self.assertEqual(self.service.deliver(now).frame.id, taskboard.frame.id)
+
+    def test_fun_fact_stays_landscape_for_day_then_resets(self) -> None:
+        selected_at = datetime(2026, 7, 22, 10, 0)
+
+        selected = self.service.select_display_mode(FUN_FACT_MODE, selected_at)
+        same_day = self.service.deliver(datetime(2026, 7, 22, 18, 0))
+        next_day = self.service.deliver(datetime(2026, 7, 23, 7, 0))
+
+        self.assertEqual(selected.image.size, (800, 600))
+        self.assertEqual(same_day.frame.id, selected.frame.id)
+        self.assertEqual(next_day.frame.profile_id, "kindle_6_167ppi_landscape")
+
+    def test_selected_fun_fact_is_used_and_persisted(self) -> None:
+        rendered = self.service.select_fun_fact("second")
+
+        self.assertEqual(self.service.selected_fun_fact(), "second")
+        self.assertIsNotNone(rendered.prepared)
+        snapshot = json.loads(rendered.prepared.scene.fragments[0].content_id)
+        self.assertEqual(snapshot["name"], "second")
+
+    def test_selected_preview_can_be_used_for_next_delivery(self) -> None:
+        now = datetime(2026, 7, 22, 10, 0)
+        preview = self.service.render(preview_random=True, now=now)
+        preview_id = self.service.store_selected_preview(preview)
+
+        self.service.change_preview(preview_id, now)
+        delivered = self.service.deliver(now)
+
+        self.assertEqual(delivered.prepared, preview.prepared)
 
     def test_taskboard_preview_ignores_treasure_hunt_mode(self) -> None:
         now = datetime(2026, 7, 22, 10, 0)

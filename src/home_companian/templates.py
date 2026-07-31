@@ -35,6 +35,8 @@ def validate_panel(panel: PanelConfig) -> Template:
             "language",
             "chinese",
             "creative",
+            "detective",
+            "fun_fact",
             "images",
             "health",
             "math",
