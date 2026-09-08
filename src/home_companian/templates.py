@@ -34,6 +34,7 @@ def validate_panel(panel: PanelConfig) -> Template:
             "items",
             "language",
             "chinese",
+            "chinese_characters",
             "creative",
             "detective",
             "fun_fact",

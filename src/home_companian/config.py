@@ -107,6 +107,8 @@ class DisplayProfile:
     id: str
     minutes: int
     panels: tuple[PanelConfig, ...]
+    # Empty for the legacy list form, otherwise one percentage per panel.
+    panel_frequencies: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,19 @@ class Settings:
             profile.panels
             for profile in self.display_profiles
             if profile.id == selected_period.display_profile
+        )
+
+    def panel_frequencies_at(self, at: datetime) -> tuple[int, ...]:
+        if not self.display_profiles:
+            return ()
+        panels = self.panels_at(at)
+        return next(
+            (
+                profile.panel_frequencies
+                for profile in self.display_profiles
+                if profile.panels == panels
+            ),
+            (),
         )
 
 
@@ -540,14 +555,33 @@ def _load_presentation(device_id: str, device: dict[str, Any]) -> PresentationCo
                 raise ConfigError(
                     f"{label}.display_profiles.{profile_id}.minutes must be positive"
                 )
-            panel_ids = profile.get("panels")
-            if (
-                not isinstance(panel_ids, list)
-                or not panel_ids
-                or not all(isinstance(panel_id, str) for panel_id in panel_ids)
-            ):
+            raw_panel_ids = profile.get("panels")
+            if isinstance(raw_panel_ids, list):
+                panel_ids = raw_panel_ids
+                panel_frequencies: tuple[int, ...] = ()
+            elif isinstance(raw_panel_ids, dict) and raw_panel_ids:
+                panel_ids = list(raw_panel_ids)
+                if not all(isinstance(panel_id, str) for panel_id in panel_ids):
+                    raise ConfigError(
+                        f"{label}.display_profiles.{profile_id}.panels must use text ids"
+                    )
+                raw_frequencies = list(raw_panel_ids.values())
+                if not all(type(value) is int and 0 <= value <= 100 for value in raw_frequencies):
+                    raise ConfigError(
+                        f"{label}.display_profiles.{profile_id}.panels frequencies must be integers from 0 to 100"
+                    )
+                if sum(raw_frequencies) != 100:
+                    raise ConfigError(
+                        f"{label}.display_profiles.{profile_id}.panels frequencies must total 100"
+                    )
+                panel_frequencies = tuple(raw_frequencies)
+            else:
                 raise ConfigError(
-                    f"{label}.display_profiles.{profile_id}.panels must be a non-empty list"
+                    f"{label}.display_profiles.{profile_id}.panels must be a non-empty list or frequency mapping"
+                )
+            if not panel_ids or not all(isinstance(panel_id, str) for panel_id in panel_ids):
+                raise ConfigError(
+                    f"{label}.display_profiles.{profile_id}.panels must contain text ids"
                 )
             if len(set(panel_ids)) != len(panel_ids):
                 raise ConfigError(
@@ -566,6 +600,7 @@ def _load_presentation(device_id: str, device: dict[str, Any]) -> PresentationCo
                     profile_id,
                     minutes,
                     tuple(loaded_panels[panel_id] for panel_id in panel_ids),
+                    panel_frequencies,
                 )
             )
         panels = tuple(loaded_panels.values())

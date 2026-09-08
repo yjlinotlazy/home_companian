@@ -47,13 +47,44 @@ devices:
             1: {module: images, collections: "plants,animals"}
             2: {module: items}
             3: {module: chinese, source: select}
-        math:
+        chinese_character:
           template: landscape_1
           slots:
-            1: {module: math, type: games}
+            1: {module: chinese_characters}
+        chinese_poem:
+          template: landscape_1
+          slots:
+            1: {module: language, type: chinese_poem}
+        fill_words:
+          template: landscape_1
+          slots:
+            1: {module: language, type: fill_words}
+        pinyin:
+          template: landscape_1
+          slots:
+            1: {module: language, type: pinyin}
+        math_game24:
+          template: landscape_1
+          slots:
+            1: {module: math, type: game24}
+        math_pattern:
+          template: landscape_1
+          slots:
+            1: {module: math, type: pattern}
+        images:
+          template: landscape_1
+          slots:
+            1: {module: images, collections: "plants,animals"}
+        tasks:
+          template: landscape_1
+          slots:
+            1: {module: items}
       display_profiles:
-        mixed: {minutes: 20, panels: [dashboard, math]}
-        dashboard_only: {minutes: 40, panels: [dashboard]}
+        # panels 可写成“面板: 百分比”；同一 profile 下总和必须为 100。
+        mixed:
+          minutes: 20
+          panels: {chinese_character: 25, chinese_poem: 20, fill_words: 10, pinyin: 10, math_game24: 8, math_pattern: 7, images: 10, tasks: 10}
+        dashboard_only: {minutes: 40, panels: {dashboard: 100}}
   kindleGen7dk:
     profile: kindle_6_167ppi_landscape
     channel: home

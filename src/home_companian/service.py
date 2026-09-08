@@ -38,6 +38,7 @@ from .forge.engine import Forge
 from .forge.models import Frame, Presentation, Scene, SceneFragment
 from .fun_fact_selection import FunFactSelectionStore
 from .modules import (
+    ChineseCharactersModule,
     ChineseModule,
     ChecklistModule,
     CreativeModule,
@@ -120,6 +121,7 @@ class DisplayService:
             "language": LanguageModule(),
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
+            "chinese_characters": ChineseCharactersModule(),
             "creative": CreativeModule(),
             "detective": DetectiveModule(),
             "fun_fact": FunFactModule(),
@@ -133,6 +135,7 @@ class DisplayService:
             "language": LanguageModule(),
             "checklist": ChecklistModule(),
             "chinese": ChineseModule(),
+            "chinese_characters": ChineseCharactersModule(),
             "creative": CreativeModule(),
             "detective": DetectiveModule(),
             "fun_fact": FunFactModule(),
@@ -1041,7 +1044,13 @@ class DisplayService:
             return scene
 
     def _prepare_scene(self, settings: Settings, at: datetime) -> PreparedScene:
-        panel = random.choice(settings.panels_at(at))
+        panels = settings.panels_at(at)
+        frequencies = settings.panel_frequencies_at(at)
+        panel = (
+            random.choices(panels, weights=frequencies, k=1)[0]
+            if frequencies
+            else random.choice(panels)
+        )
         return self._prepare_panel(settings, at, panel, self.device_modules)
 
     def _prepare_preview_scene(

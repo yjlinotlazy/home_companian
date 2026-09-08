@@ -188,7 +188,9 @@ devices:
         dashboard_only: {minutes: 40, panels: [dashboard]}
 ```
 
-Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力；`presentation.display_profiles` 则把刷新分钟数和允许轮换的命名 panels 绑定，`refresh.schedule` 按时段引用它。未配置 display profiles 时，旧的固定刷新窗口和 panel 列表仍兼容。完整示例见 [config.example.yaml](config.example.yaml)。
+Channel 决定选择什么内容。Device 的硬件 `profile` 决定屏幕能力；`presentation.display_profiles` 则把刷新分钟数和允许轮换的命名 panels 绑定，`refresh.schedule` 按时段引用它。需要控制项目比例时，把 `panels` 写成“面板名: 百分比”的映射，百分比总和必须为 100，例如 `panels: {dashboard: 40, chinese: 40, math: 20}`。未配置 display profiles 时，旧的固定刷新窗口和 panel 列表仍兼容。完整示例见 [config.example.yaml](config.example.yaml)。
+
+频率应按最终叶子项目统一计算，而不是先给“语文”一个比例、再在语文内部二次分配。例如 `chinese_character`、`chinese_poem`、`fill_words`、`pinyin`、`math` 等面板直接放在同一个 `panels` 映射中，所有百分比总和为 100。这样语文总比例就是这些语文子项目比例之和。
 
 数学模块的 `type: games` 会轮换独立小游戏，目前包括 `game24` 和 `pattern`；也可以指定其中一种。找规律题包含数字、符号、词语、方向和图形化骰子点数序列。新题型实现放在 `modules/math_games/` 并注册到 `MathModule`。
 

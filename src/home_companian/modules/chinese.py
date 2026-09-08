@@ -126,3 +126,54 @@ class ChineseModule:
         y = (rect.height - (bottom - top)) / 2 - top
         draw.text((x, y), content_id, font=font, fill=0)
         return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")
+
+
+class ChineseCharactersModule:
+    """Display a five-character recognition exercise."""
+
+    name = "chinese_characters"
+
+    def __init__(self) -> None:
+        self._last_characters: tuple[str, ...] | None = None
+        self._lock = Lock()
+
+    def prepare(
+        self,
+        settings: Settings,
+        at: datetime,
+        assignment: SlotAssignment,
+    ) -> str:
+        del at, assignment
+        characters = load_chinese_characters(settings.library_dir)
+        if len(characters) < 5:
+            raise ConfigError("chinese/select.md must contain at least five characters")
+        with self._lock:
+            for _ in range(20):
+                selected = tuple(random.sample(characters, 5))
+                if selected != self._last_characters:
+                    self._last_characters = selected
+                    return "".join(selected)
+        raise ConfigError("could not generate a new five-character exercise")
+
+    def render(
+        self,
+        settings: Settings,
+        content_id: int | str,
+        rect: Rect,
+        now: datetime,
+    ) -> Image.Image:
+        del now
+        if not isinstance(content_id, str) or len(content_id) != 5:
+            raise ConfigError("invalid five-character Chinese content id")
+        image = Image.new("L", (rect.width, rect.height), 255)
+        draw = ImageDraw.Draw(image)
+        cell_width = rect.width / 5
+        size = max(20, min(120, rect.height - 40, int(cell_width - 20)))
+        font = ImageFont.truetype(str(settings.font), size)
+        for index, character in enumerate(content_id):
+            left = index * cell_width
+            bounds = draw.textbbox((0, 0), character, font=font)
+            x = left + (cell_width - (bounds[2] - bounds[0])) / 2 - bounds[0]
+            y = (rect.height - (bounds[3] - bounds[1])) / 2 - bounds[1]
+            draw.text((x, y), character, font=font, fill=0)
+        return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")

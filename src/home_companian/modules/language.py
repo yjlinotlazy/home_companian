@@ -21,6 +21,74 @@ FILL_WORD_PART = re.compile(
 )
 SYMBOLS = ("△", "○", "□")
 POEM_CLAUSE = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fff]+$")
+PINYIN_VALID_TONES = {
+    "ba": ("bā", "bá", "bǎ", "bà"),
+    "bo": ("bō", "bó", "bǒ"),
+    "bu": ("bǔ", "bù"),
+    "pa": ("pā", "pá", "pà"),
+    "po": ("pō", "pó", "pǒ", "pò"),
+    "pu": ("pū", "pú", "pǔ", "pù"),
+    "ma": ("mā", "má", "mǎ", "mà"),
+    "mo": ("mō", "mó", "mǒ", "mò"),
+    "mu": ("mǔ", "mù"),
+    "fa": ("fā", "fá", "fǎ", "fà"),
+    "fo": ("fó",),
+    "fu": ("fū", "fú", "fǔ", "fù"),
+    "da": ("dā", "dá", "dǎ", "dà"),
+    "de": ("dé",),
+    "du": ("dū", "dú", "dǔ", "dù"),
+    "ta": ("tā", "tǎ", "tà"),
+    "te": ("tè",),
+    "tu": ("tū", "tú", "tǔ", "tù"),
+    "na": ("ná", "nǎ", "nà"),
+    "ne": ("nè",),
+    "nu": ("nú", "nǔ", "nù"),
+    "nü": ("nǚ",),
+    "la": ("lā", "lá", "lǎ", "là"),
+    "le": ("lè",),
+    "lu": ("lū", "lú", "lǔ", "lù"),
+    "lü": ("lǘ", "lǚ", "lǜ"),
+    "ga": ("gā", "gá", "gǎ", "gà"),
+    "ge": ("gē", "gé", "gě", "gè"),
+    "gu": ("gū", "gǔ", "gù"),
+    "gua": ("guā", "guá", "guǎ", "guà"),
+    "ka": ("kā", "kǎ"),
+    "ke": ("kē", "ké", "kě", "kè"),
+    "ku": ("kū", "kǔ", "kù"),
+    "kua": ("kuā", "kuǎ", "kuà"),
+    "ha": ("hā",),
+    "he": ("hē", "hé", "hè"),
+    "hu": ("hū", "hú", "hǔ", "hù"),
+    "hua": ("huā", "huá", "huǎ", "huà"),
+    "ju": ("jū", "jú", "jǔ", "jù"),
+    "qu": ("qū", "qú", "qǔ", "qù"),
+    "xu": ("xū", "xú", "xǔ", "xù"),
+    "re": ("rě", "rè"),
+    "ru": ("rú", "rǔ", "rù"),
+    "za": ("zā", "zá", "zǎ"),
+    "ze": ("zé", "zè"),
+    "zu": ("zū", "zú", "zǔ"),
+    "ca": ("cā",),
+    "ce": ("cè",),
+    "cu": ("cū", "cú", "cù"),
+    "sa": ("sā", "sǎ", "sà"),
+    "se": ("sè",),
+    "su": ("sū", "sú", "sù"),
+    "ya": ("yā", "yá", "yǎ", "yà"),
+    "yo": ("yō",),
+    "ye": ("yē", "yé", "yě", "yè"),
+    "yu": ("yū", "yú", "yǔ", "yù"),
+    "wa": ("wā", "wá", "wǎ", "wà"),
+    "wo": ("wō", "wǒ", "wò"),
+    "wu": ("wū", "wú", "wǔ", "wù"),
+}
+PINYIN_BASES = tuple(PINYIN_VALID_TONES)
+PINYIN_SYLLABLES = frozenset(
+    syllable
+    for variants in PINYIN_VALID_TONES.values()
+    for syllable in variants
+)
+PINYIN_ITEMS_PER_SCREEN = 3
 
 
 @dataclass(frozen=True)
@@ -129,6 +197,7 @@ class LanguageModule:
         self._last_sentence: str | None = None
         self._last_fill_problem: str | None = None
         self._last_poem: tuple[str, ...] | None = None
+        self._last_pinyin: tuple[str, ...] | None = None
         self._last_game_type: str | None = None
         self._game_queue: list[str] = []
         self._lock = Lock()
@@ -141,11 +210,11 @@ class LanguageModule:
     ) -> str:
         del at
         selected_type = assignment.option("type", "cipher")
-        game_types = ("cipher", "fill_words", "chinese_poem")
+        game_types = ("cipher", "fill_words", "chinese_poem", "pinyin")
         if selected_type not in {*game_types, "games"}:
             raise ConfigError(
                 "language module type must be cipher, fill_words, "
-                "chinese_poem, or games"
+                "chinese_poem, pinyin, or games"
             )
         if selected_type == "games":
             with self._lock:
@@ -170,6 +239,8 @@ class LanguageModule:
             return self._prepare_fill_words(settings)
         if selected_type == "chinese_poem":
             return self._prepare_chinese_poem(settings)
+        if selected_type == "pinyin":
+            return self._prepare_pinyin()
 
         sentences = load_english_sentences(settings.library_dir)
         with self._lock:
@@ -243,6 +314,22 @@ class LanguageModule:
             separators=(",", ":"),
         )
 
+    def _prepare_pinyin(self) -> str:
+        with self._lock:
+            for _ in range(20):
+                bases = random.sample(PINYIN_BASES, PINYIN_ITEMS_PER_SCREEN)
+                syllables = tuple(
+                    random.choice(PINYIN_VALID_TONES[base]) for base in bases
+                )
+                if syllables != self._last_pinyin:
+                    self._last_pinyin = syllables
+                    return json.dumps(
+                        {"type": "pinyin", "syllables": list(syllables)},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+        raise ConfigError("could not generate a new pinyin exercise")
+
     def render(
         self,
         settings: Settings,
@@ -263,6 +350,8 @@ class LanguageModule:
             return self._render_fill_words(settings, snapshot, rect)
         if snapshot.get("type") == "chinese_poem":
             return self._render_chinese_poem(settings, snapshot, rect)
+        if snapshot.get("type") == "pinyin":
+            return self._render_pinyin(settings, snapshot, rect)
         try:
             encoded = snapshot["encoded"]
             mapping = snapshot["mapping"]
@@ -326,6 +415,58 @@ class LanguageModule:
             fill=0,
             anchor="md",
         )
+        return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")
+
+    @staticmethod
+    def _render_pinyin(
+        settings: Settings,
+        snapshot: dict[str, object],
+        rect: Rect,
+    ) -> Image.Image:
+        syllables = snapshot.get("syllables")
+        if (
+            not isinstance(syllables, list)
+            or len(syllables) != PINYIN_ITEMS_PER_SCREEN
+            or len(set(syllables)) != len(syllables)
+            or not all(
+                isinstance(syllable, str) and syllable in PINYIN_SYLLABLES
+                for syllable in syllables
+            )
+        ):
+            raise ConfigError("invalid language snapshot")
+
+        image = Image.new("L", (rect.width, rect.height), 255)
+        draw = ImageDraw.Draw(image)
+        title_size = 26 if rect.width >= 500 else 18
+        title_font = ImageFont.truetype(str(settings.font), title_size)
+        draw.text(
+            (rect.width / 2, 4),
+            "拼音拼读",
+            font=title_font,
+            fill=0,
+            anchor="ma",
+        )
+        cell_width = rect.width / len(syllables)
+        content_top = title_size + 12
+        font_size = max(
+            28,
+            int(
+                min(
+                    cell_width * 0.56,
+                    (rect.height - content_top) * 0.58,
+                    76,
+                )
+            ),
+        )
+        font = ImageFont.truetype(str(settings.latin_font), font_size)
+        for index, syllable in enumerate(syllables):
+            draw.text(
+                (cell_width * (index + 0.5), content_top + (rect.height - content_top) / 2),
+                syllable,
+                font=font,
+                fill=0,
+                anchor="mm",
+            )
         return image.point(lambda pixel: 255 if pixel > 180 else 0, mode="1")
 
     @staticmethod

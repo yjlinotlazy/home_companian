@@ -77,11 +77,18 @@ if ! curl_with_tls -fSs \
     echo "Home server unavailable; downloading remote image"
     download_source=remote
     : > "$HEADERS_TEMP"
+    cache_buster="$(date +%s)-$$"
+    case "$REMOTE_IMAGE_URL" in
+        *\?*) remote_image_request_url="${REMOTE_IMAGE_URL}&home_companian_cache_bust=${cache_buster}" ;;
+        *) remote_image_request_url="${REMOTE_IMAGE_URL}?home_companian_cache_bust=${cache_buster}" ;;
+    esac
     if ! curl -fLSs \
         --connect-timeout 15 \
         --max-time 60 \
+        -H 'Cache-Control: no-cache' \
+        -H 'Pragma: no-cache' \
         -o "$FRAME_TEMP" \
-        "$REMOTE_IMAGE_URL"; then
+        "$remote_image_request_url"; then
         echo "Remote image download failed; keeping the current display" >&2
         exit 1
     fi

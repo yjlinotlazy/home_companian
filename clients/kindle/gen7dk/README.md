@@ -103,7 +103,7 @@ WIFI_WAIT_SECONDS=60
 
 `INSECURE=1` 只用于临时排查证书问题，正常使用必须恢复为 `0`。
 
-`REMOTE_IMAGE_URL` 可留空。外出使用手机热点时，可在 Kindle 本地的 `client.conf` 中填入 `library/rendered/kindleGen7dk.png` 对应的 Dropbox 直接下载共享链接。脚本先尝试家中服务器，失败后跟随重定向下载该 PNG。完整共享链接等同访问凭据，不得写入仓库、示例配置或日志。公网静态图没有 ACK，因此网页“当前画面”只会在通过家中服务器刷新成功后确认更新。
+`REMOTE_IMAGE_URL` 可留空。外出使用手机热点时，可在 Kindle 本地的 `client.conf` 中填入 `library/rendered/kindleGen7dk.png` 对应的 Dropbox 直接下载共享链接。脚本先尝试家中服务器，失败后使用唯一查询参数和禁缓存请求头，跟随重定向下载该 PNG，避免 Dropbox 边缘缓存返回旧画面。完整共享链接等同访问凭据，不得写入仓库、示例配置或日志。公网静态图没有 ACK，因此网页“当前画面”只会在通过家中服务器刷新成功后确认更新。
 
 ## 5. 设置执行权限
 

@@ -9,6 +9,8 @@ from unittest.mock import patch
 from home_companian.config import ConfigError
 from home_companian.domain import Rect, SlotAssignment
 from home_companian.modules.language import (
+    PINYIN_VALID_TONES,
+    PINYIN_SYLLABLES,
     SYMBOLS,
     LanguageModule,
     load_chinese_poems,
@@ -132,13 +134,50 @@ class LanguageModuleTests(unittest.TestCase):
 
         snapshots = tuple(
             json.loads(module.prepare(self.settings, datetime.now(), assignment))
-            for _ in range(3)
+            for _ in range(4)
         )
 
         self.assertEqual(
             {snapshot["type"] for snapshot in snapshots},
-            {"cipher", "fill_words", "chinese_poem"},
+            {"cipher", "fill_words", "chinese_poem", "pinyin"},
         )
+
+    def test_pinyin_uses_three_toned_single_final_syllables(self) -> None:
+        snapshot = json.loads(
+            LanguageModule().prepare(
+                self.settings,
+                datetime.now(),
+                SlotAssignment(1, "language", (("type", "pinyin"),)),
+            )
+        )
+
+        self.assertEqual(snapshot["type"], "pinyin")
+        self.assertEqual(len(snapshot["syllables"]), 3)
+        self.assertEqual(len(set(snapshot["syllables"])), 3)
+        self.assertTrue(set(snapshot["syllables"]).issubset(PINYIN_SYLLABLES))
+
+    def test_pinyin_includes_gua_kua_hua_compounds(self) -> None:
+        self.assertEqual(
+            PINYIN_VALID_TONES["gua"], ("guā", "guá", "guǎ", "guà")
+        )
+        self.assertEqual(PINYIN_VALID_TONES["kua"], ("kuā", "kuǎ", "kuà"))
+        self.assertEqual(
+            PINYIN_VALID_TONES["hua"], ("huā", "huá", "huǎ", "huà")
+        )
+
+    def test_pinyin_rejects_nonexistent_toned_syllable(self) -> None:
+        snapshot = json.dumps(
+            {"type": "pinyin", "syllables": ["bā", "nǚ", "fǒ"]},
+            ensure_ascii=False,
+        )
+
+        with self.assertRaisesRegex(ConfigError, "invalid language snapshot"):
+            LanguageModule().render(
+                self.settings,
+                snapshot,
+                Rect(0, 0, 792, 228),
+                datetime.now(),
+            )
 
     def test_avoids_repeating_the_same_sentence(self) -> None:
         module = LanguageModule()
@@ -207,6 +246,26 @@ class LanguageModuleTests(unittest.TestCase):
                     "举头望明月",
                     "低头思故乡",
                 ],
+            },
+            ensure_ascii=False,
+        )
+
+        image = LanguageModule().render(
+            self.settings,
+            snapshot,
+            Rect(0, 0, 792, 228),
+            datetime.now(),
+        )
+
+        self.assertEqual((image.size, image.mode), ((792, 228), "1"))
+        self.assertEqual(image.getextrema(), (0, 255))
+
+    @unittest.skipUnless(FONT.exists(), "Source Han Sans font is not installed")
+    def test_renders_pinyin_for_crowpanel(self) -> None:
+        snapshot = json.dumps(
+            {
+                "type": "pinyin",
+                "syllables": ["bā", "pó", "nǚ"],
             },
             ensure_ascii=False,
         )
