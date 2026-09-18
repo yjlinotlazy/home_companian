@@ -32,7 +32,8 @@ devices:
     refresh:
       schedule:
         - {start: "08:00", end: "12:00", profile: mixed}
-        - {start: "12:00", end: "20:00", profile: dashboard_only}
+        - {start: "12:00", end: "17:00", profile: dashboard_only}
+        - {start: "17:00", end: "20:00", profile: mixed}
     presentation:
       status_bar:
         left: []
@@ -100,9 +101,8 @@ devices:
         right:
           - module: weekday
       panel:
-        template: landscape_5
+        template: landscape_6
         slots:
           1: {module: checklist, group: person_1}
-          2: {module: checklist, group: person_2}
-          3: {module: checklist, group: family, reward: toy}
-          4: {module: images, collections: "*"}
+          2: {module: checklist, group: person_2, reward: toy}
+          3: {module: images, directory: /home/yli/Dropbox/Embedded/home_companian/family_album, frame: "true"}

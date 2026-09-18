@@ -53,6 +53,14 @@ class ChecklistModule:
                     raise ConfigError(
                         "checklist portrait_width must be between 40 and 190"
                     )
+        font_size = assignment.option("font_size")
+        if font_size is not None:
+            try:
+                font_size = int(font_size)
+            except ValueError as exc:
+                raise ConfigError("checklist font_size must be an integer") from exc
+            if not 12 <= font_size <= 32:
+                raise ConfigError("checklist font_size must be between 12 and 32")
         reward_snapshot = None
         reward_id = assignment.option("reward")
         if reward_id is not None:
@@ -72,6 +80,7 @@ class ChecklistModule:
                 "completed": completed_ids,
                 "portrait": portrait,
                 "portrait_width": portrait_width,
+                "font_size": font_size,
                 "reward": reward_snapshot,
             },
             ensure_ascii=False,
@@ -94,6 +103,7 @@ class ChecklistModule:
             completed_ids = frozenset(snapshot["completed"])
             portrait = snapshot.get("portrait")
             portrait_width = snapshot.get("portrait_width", 190)
+            font_size = snapshot.get("font_size")
             reward = snapshot.get("reward")
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise ConfigError("invalid checklist snapshot") from exc
@@ -103,6 +113,9 @@ class ChecklistModule:
             type(item_id) is int for item_id in item_ids
         ) or not all(
             type(item_id) is int for item_id in completed_ids
+        ) or (
+            font_size is not None
+            and (type(font_size) is not int or not 12 <= font_size <= 32)
         ):
             raise ConfigError("invalid checklist snapshot")
         if reward is not None and (
@@ -126,12 +139,13 @@ class ChecklistModule:
 
         image = Image.new("L", (rect.width, rect.height), 255)
         draw = ImageDraw.Draw(image)
-        title_font = ImageFont.truetype(str(settings.font), 36)
+        title_font = ImageFont.truetype(str(settings.font), max(20, (font_size or 32) + 4))
         reward_height = 62 if reward is not None else 0
         content_height = rect.height - reward_height
-        text_size = min(
-            32,
-            max(20, (content_height - 70) // max(1, len(items)) - 8),
+        text_size = (
+            font_size
+            if font_size is not None
+            else min(32, max(20, (content_height - 70) // max(1, len(items)) - 8))
         )
         chinese_font = ImageFont.truetype(str(settings.font), text_size)
         latin_font = ImageFont.truetype(str(settings.latin_font), text_size)
@@ -199,7 +213,9 @@ class ChecklistModule:
             )
             y += line_height
         if reward is not None:
-            reward_font = ImageFont.truetype(str(settings.font), 36)
+            reward_font = ImageFont.truetype(
+                str(settings.font), max(20, (font_size or 32) + 4)
+            )
             label = reward["name"]
             label_box = draw.textbbox((0, 0), label, font=reward_font)
             label_width = label_box[2] - label_box[0]

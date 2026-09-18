@@ -9,6 +9,7 @@ from io import BytesIO
 from ipaddress import ip_address
 from pathlib import Path
 from datetime import datetime, time
+import time as wall_time
 from threading import Lock
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
@@ -17,6 +18,7 @@ from .config import ConfigError, FontChoice, load_config
 from .devices import get_device_profile
 from .display_modes import DISPLAY_MODES, TASKBOARD_MODE
 from .service import DisplayService, RenderedDisplay, RewardStatus
+from .server_logging import CountingWriter, RequestLogger, content_length
 
 
 DISPLAY_BIN_DEVICE_ID = "wall_panel"
@@ -143,8 +145,11 @@ def index_html(
         <button type="button" data-action="time-preview">预览</button></div>
       </div>"""
         if device.profile_id.startswith("kindle"):
-            preview_action = "taskboard-preview.png"
-            refresh_controls = """<button type="button" data-action="refresh-rendered">手动刷新</button>
+            preview_action = "preview.png"
+            preview_action = f"{preview_action}?refresh={int(datetime.now().timestamp())}"
+            refresh_controls = """<button type="button" data-action="refresh-preview">刷新预览</button>
+      <button type="button" data-action="apply-refresh">应用</button>
+      <span data-refresh-status></span>
       <img data-next-preview alt="Kindle rendered image preview">"""
             mode_controls = """<div class="mode-controls">
       <label>当前模式 <select data-display-mode>
@@ -159,6 +164,7 @@ def index_html(
     <h3 data-mode-section-title="taskboard">任务板</h3>"""
         else:
             preview_action = "preview.png"
+            preview_action = f"{preview_action}?refresh={int(datetime.now().timestamp())}"
             continue_disabled = "" if device.confirmed else " disabled"
             refresh_controls = f"""<span>下次刷新：<span data-next-refresh-time>加载中</span></span>
       <button type="button" data-action="continue-current"{continue_disabled}>继续当前</button>
@@ -391,11 +397,16 @@ async function preview(section, query) {{
   section.querySelector('[data-change-status]').textContent = '仅预览';
 }}
 
-async function loadNextRefresh(section) {{
-  const response = await fetch(devicePath(section, 'next-refresh'));
+async function loadNextRefresh(section, manual = false) {{
+  const query = manual ? '?refresh=1' : '';
+  const response = await fetch(devicePath(section, 'next-refresh') + query);
   if (!response.ok) throw new Error(await response.text());
   const result = await response.json();
   section.querySelector('[data-next-preview]').src = refreshed(result.image_url);
+  if (manual) {{
+    section.querySelector('[data-action="apply-refresh"]').disabled = false;
+    section.querySelector('[data-refresh-status]').textContent = '仅预览';
+  }}
   const timeDisplay = section.querySelector('[data-next-refresh-time]');
   if (!timeDisplay) return;
   const nextAt = new Date(result.next_at);
@@ -410,22 +421,38 @@ async function loadNextRefresh(section) {{
   );
 }}
 
-async function refreshRendered(section) {{
-  const button = section.querySelector('[data-action="refresh-rendered"]');
+async function refreshPreview(section) {{
+  const button = section.querySelector('[data-action="refresh-preview"]');
+  button.disabled = true;
+  try {{
+    await loadNextRefresh(section, true);
+  }} finally {{
+    button.disabled = false;
+  }}
+}}
+
+async function applyRefresh(section) {{
+  const button = section.querySelector('[data-action="apply-refresh"]');
   button.disabled = true;
   try {{
     const response = await fetch(devicePath(section, 'refresh'), {{method: 'POST'}});
     if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    section.querySelector('[data-current-preview]').src = refreshed(result.image_url);
     await loadNextRefresh(section);
+    section.querySelector('[data-refresh-status]').textContent = '已应用';
   }} finally {{
     button.disabled = false;
   }}
 }}
 
 document.querySelectorAll('.device-section').forEach(section => {{
-  const refreshButton = section.querySelector('[data-action="refresh-rendered"]');
-  if (refreshButton) {{
-    refreshButton.addEventListener('click', () => refreshRendered(section));
+  const refreshPreviewButton = section.querySelector('[data-action="refresh-preview"]');
+  if (refreshPreviewButton) {{
+    refreshPreviewButton.addEventListener('click', () => refreshPreview(section));
+    section.querySelector('[data-action="apply-refresh"]').addEventListener(
+      'click', () => applyRefresh(section)
+    );
   }}
   const continueButton = section.querySelector('[data-action="continue-current"]');
   if (continueButton) {{
@@ -1038,6 +1065,26 @@ def make_handler(
     device_services = device_services or DeviceServices(service.config_path, service)
 
     class Handler(BaseHTTPRequestHandler):
+        request_logger = RequestLogger(Path(__file__).resolve().parents[2], "home_companian")
+
+        def handle_one_request(self) -> None:
+            started_at = wall_time.time()
+            self._telemetry_status = HTTPStatus.INTERNAL_SERVER_ERROR
+            original_wfile = self.wfile
+            counted_wfile = CountingWriter(original_wfile)
+            self.wfile = counted_wfile
+            try:
+                super().handle_one_request()
+            finally:
+                self.wfile = original_wfile
+                try:
+                    self.request_logger.record(target=getattr(self, "path", ""), method=getattr(self, "command", "UNKNOWN"), status=getattr(self, "_telemetry_status", 500), request_size=content_length(self.headers), response_size=counted_wfile.bytes_written, started_at=started_at)
+                except Exception:
+                    pass
+
+        def send_response(self, code, message=None):
+            self._telemetry_status = int(code)
+            super().send_response(code, message)
         def do_GET(self) -> None:
             request = urlparse(self.path)
             try:
@@ -1076,8 +1123,12 @@ def make_handler(
                         )
                         confirmed = False
                     else:
-                        rendered = device_service.render_current()
-                        confirmed = rendered is not None
+                        confirmed = device_service.render_current() is not None
+                        profile = get_device_profile(device_service.settings().profile_id)
+                        if profile.refresh_mode == "manual":
+                            rendered = device_service.render_current_preview()
+                        else:
+                            rendered = device_service.render_current()
                         if rendered is None:
                             rendered = device_service.preview_next_delivery()
                     self._send(
@@ -1129,7 +1180,10 @@ def make_handler(
                     device_service = device_services.get(next_refresh_device_id)
                     now = datetime.now()
                     if device_service.settings().profile_id.startswith("kindle_"):
-                        rendered = device_service.preview_taskboard_delivery(now)
+                        rendered = device_service.preview_taskboard_delivery(
+                            now,
+                            refresh="refresh" in parse_qs(request.query),
+                        )
                         preview_action = "taskboard-preview.png"
                     else:
                         rendered = device_service.preview_next_delivery(now)

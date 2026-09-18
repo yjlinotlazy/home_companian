@@ -188,14 +188,23 @@ class HttpServerTests(unittest.TestCase):
         self.assertLess(page.index("<h2>CrowPanel"), divider)
         self.assertLess(divider, page.index("<h2>Kindle"))
         self.assertIn('/v1/devices/wall_panel/preview.png', page)
-        self.assertIn('/v1/devices/kindleGen7dk/taskboard-preview.png', page)
+        self.assertIn('/v1/devices/kindleGen7dk/preview.png', page)
+        self.assertNotIn(
+            '/v1/devices/kindleGen7dk/taskboard-preview.png?refresh=',
+            page,
+        )
         self.assertIn("<p data-unconfirmed>设备尚未确认显示画面</p>", page)
         self.assertEqual(
             page.count('<button type="button" data-action="random-preview">'), 1
         )
         self.assertEqual(page.count("<img data-next-preview"), 2)
         self.assertEqual(page.count("data-next-refresh-time"), 2)
-        self.assertIn('data-action="refresh-rendered">手动刷新</button>', page)
+        self.assertIn('data-action="refresh-preview">刷新预览</button>', page)
+        self.assertIn('data-action="apply-refresh">应用</button>', page)
+        self.assertIn(
+            "section.querySelector('[data-current-preview]').src = refreshed(result.image_url);",
+            page,
+        )
         self.assertEqual(
             page.count('<button type="button" data-action="continue-current"'),
             1,

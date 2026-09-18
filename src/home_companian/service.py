@@ -271,6 +271,12 @@ class DisplayService:
         with self._current_display_lock:
             return self._current_display
 
+    def render_current_preview(self) -> RenderedDisplay | None:
+        """Return the applied frame for the web preview, if one is pending."""
+        with self._delivery_lock:
+            pending = self._pending_display
+        return pending if pending is not None else self.render_current()
+
     def continue_current(self, now: datetime | None = None) -> datetime:
         """Use the confirmed current CrowPanel image for the next delivery."""
         now = now or datetime.now()
@@ -463,10 +469,25 @@ class DisplayService:
     def preview_taskboard_delivery(
         self,
         now: datetime | None = None,
+        refresh: bool = False,
     ) -> RenderedDisplay:
         """Preview the taskboard independently of the selected display mode."""
         now = now or datetime.now()
         settings = self.settings()
+        if refresh:
+            next_at = self._next_check_at(settings, now)
+            if settings.mode == "scheduled":
+                item = select_scheduled(settings, next_at.time())
+                prepared = self._scene_for_item(settings, item, next_at)
+            else:
+                prepared = self._prepare_scene(settings, next_at)
+            with self._next_scene_lock:
+                self._next_scene = prepared
+                self._next_scene_key = self._scene_key(settings)
+                self._next_scene_forced = True
+            self.refresh_prepared_checklists(now)
+            prepared = self._peek_next_scene(settings, now)
+            return self._render_scene(prepared, settings, now)
         if self._has_forced_scene(settings) or settings.mode == "random":
             self._peek_next_scene(settings, now)
             self.refresh_prepared_checklists(now)

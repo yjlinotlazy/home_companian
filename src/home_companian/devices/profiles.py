@@ -15,6 +15,7 @@ class DeviceProfile:
     ppi: int | None = None
     grayscale_levels: int = 2
     frame_rotation_degrees: int = 0
+    refresh_mode: str = "auto"
 
     @property
     def content_height(self) -> int:
@@ -42,6 +43,7 @@ KINDLE_6_167PPI = DeviceProfile(
     capabilities=("grayscale", "portrait", "touch"),
     ppi=167,
     grayscale_levels=16,
+    refresh_mode="manual",
 )
 
 KINDLE_6_167PPI_LANDSCAPE = DeviceProfile(
@@ -55,6 +57,7 @@ KINDLE_6_167PPI_LANDSCAPE = DeviceProfile(
     ppi=167,
     grayscale_levels=16,
     frame_rotation_degrees=90,
+    refresh_mode="manual",
 )
 
 

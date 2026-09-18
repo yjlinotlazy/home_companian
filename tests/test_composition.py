@@ -21,7 +21,7 @@ class KindleDecorationTests(unittest.TestCase):
             image = Image.new("L", (600, 800), 255)
             _add_kindle_decorations(image, Path(temporary_dir), KINDLE_6_167PPI)
 
-            self.assertLess(image.getpixel((225, 380)), 255)
+            self.assertLess(image.getpixel((470, 20)), 255)
             self.assertLess(image.getpixel((560, 760)), 255)
             self.assertEqual(image.getpixel((300, 400)), 255)
 

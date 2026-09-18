@@ -101,6 +101,30 @@ class ImagesModuleTests(unittest.TestCase):
         self.assertEqual(rendered.getpixel((50, 0)), 255)
         self.assertEqual(rendered.getpixel((50, 50)), 0)
 
+    def test_directory_frame_wraps_contained_image_tightly(self) -> None:
+        directory = self.library / "family_album"
+        directory.mkdir()
+        Image.new("L", (400, 100), 255).save(directory / "wide.png")
+        assignment = SlotAssignment(
+            1,
+            "images",
+            (("directory", str(directory)), ("frame", "true")),
+        )
+        module = ImagesModule()
+        content_id = module.prepare(self.settings, datetime.now(), assignment)
+
+        rendered = module.render(
+            self.settings,
+            content_id,
+            Rect(0, 0, 100, 100),
+            datetime.now(),
+        )
+
+        self.assertEqual(rendered.getpixel((50, 36)), 255)
+        self.assertEqual(rendered.getpixel((50, 37)), 96)
+        self.assertEqual(rendered.getpixel((0, 49)), 96)
+        self.assertEqual(rendered.getpixel((50, 0)), 255)
+
     def test_kindle_prefers_grey_sibling_regardless_of_extension(self) -> None:
         Image.new("L", (200, 200), 0).save(self.collection / "a_grey.jpg")
         settings = SimpleNamespace(

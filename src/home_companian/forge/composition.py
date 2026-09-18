@@ -81,8 +81,8 @@ def _add_kindle_decorations(
             "rainbow.png",
             (82, 55),
             (
-                image.width // 2 - 94,
-                profile.status_bar_height + profile.content_height // 2 - 67,
+                image.width - 158,
+                0,
             ),
         ),
         ("heart_completed.png", (46, 46), (image.width - 58, image.height - 58)),
