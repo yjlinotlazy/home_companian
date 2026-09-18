@@ -105,4 +105,4 @@ devices:
         slots:
           1: {module: checklist, group: person_1}
           2: {module: checklist, group: person_2, reward: toy}
-          3: {module: images, directory: /home/yli/Dropbox/Embedded/home_companian/family_album, frame: "true"}
+          3: {module: images, directory: /path/to/family-album, frame: "true"}
