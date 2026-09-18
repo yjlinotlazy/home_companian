@@ -30,6 +30,10 @@ from home_companian.http_server import (
     parse_preview_id,
     parse_preview_time,
 )
+
+
+TEST_CLIENT_IP = "203.0.113.10"
+TEST_PEER_IP = "203.0.113.20"
 from home_companian.service import RewardStatus
 
 
@@ -39,12 +43,12 @@ class HttpServerTests(unittest.TestCase):
 
     def test_request_source_ip_trusts_forwarding_only_from_loopback(self) -> None:
         self.assertEqual(
-            request_source_ip("127.0.0.1", "192.0.2.10, 127.0.0.1"),
-            "192.0.2.10",
+            request_source_ip("127.0.0.1", f"{TEST_CLIENT_IP}, 127.0.0.1"),
+            TEST_CLIENT_IP,
         )
         self.assertEqual(
-            request_source_ip("192.0.2.20", "198.51.100.30"),
-            "192.0.2.20",
+            request_source_ip(TEST_PEER_IP, TEST_CLIENT_IP),
+            TEST_PEER_IP,
         )
         self.assertEqual(request_source_ip("::1", "bad"), "::1")
 
